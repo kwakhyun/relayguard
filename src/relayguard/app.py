@@ -108,7 +108,7 @@ def create_app(settings: Settings, *, upstream_transport=None):
             app.state.upstream_client = client
             yield
 
-    app = FastAPI(title="RelayGuard", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="RelayGuard", version="0.1.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     app.state.store, app.state.settings = store, settings
     app.state.demo_lock = asyncio.Lock()

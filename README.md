@@ -8,7 +8,30 @@ RelayGuard is a self-hosted, scoped credential gateway for HTTP integrations. MI
 
 ## 바로 실행
 
-Python **3.11 이상**과 최초 설치 시 인터넷 연결이 필요하다. API 키, 계정 가입, 유료 서비스는 필요 없다.
+Docker가 실행 중이면 공개 이미지를 받아 데모를 시작할 수 있다. GitHub 로그인이나 API 키는 필요 없다. `linux/amd64`와 `linux/arm64`를 지원한다.
+
+```bash
+docker run --rm -it --name relayguard-demo \
+  -p 127.0.0.1:8810:8810 \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --mount type=volume,source=relayguard-demo-data,target=/data \
+  ghcr.io/kwakhyun/relayguard:0.1.1 \
+  relayguard demo --host 0.0.0.0 --db /data/demo.db
+```
+
+1. [로컬 콘솔](http://127.0.0.1:8810)을 연다.
+2. 터미널에 표시된 **데모 관리자 토큰**으로 연결한다. 토큰은 재시작할 때 바뀐다.
+3. **데모 시나리오 실행**을 누른다. 실제 HTTP 요청 12건으로 정상 조회와 차단 결과를 확인한다.
+4. 키를 발급해 직접 호출하고, 콘솔에서 폐기한 뒤 같은 키의 요청이 거부되는지 확인한다.
+
+`Ctrl+C`로 종료한다. 같은 명령으로 다시 실행하면 `relayguard-demo-data` 볼륨의 릴레이 키와 감사 기록을 이어서 사용한다. 컨테이너 안에서는 합성 CRM에 loopback으로 연결하며, 호스트에는 콘솔 포트만 노출한다. 실제 개인정보나 외부 서비스 토큰은 사용하지 않는다.
+
+[GHCR 패키지](https://github.com/users/kwakhyun/packages/container/package/relayguard)에는 `0.1.1`, `latest`, `sha-<commit>` 태그를 제공한다. 재현 가능한 실행에는 버전 태그나 [이미지 digest](docs/deployment.md#이미지-선택과-직접-빌드)를 사용한다.
+
+### Python으로 실행
+
+Python **3.11 이상**과 최초 설치 시 인터넷 연결이 필요하다.
 
 ```bash
 git clone https://github.com/kwakhyun/relayguard.git
@@ -31,12 +54,7 @@ relayguard demo
 
 릴리스에는 wheel, 소스 배포본, 전체 프로젝트 ZIP, `SHA256SUMS.txt`가 포함된다. `SHA256SUMS.txt`는 다운로드된 파일의 일치 여부를 확인하는 체크섬이며 별도 서명을 뜻하지 않는다.
 
-1. [로컬 콘솔](http://127.0.0.1:8810)을 연다.
-2. 터미널에 표시된 **데모 관리자 토큰**으로 연결한다. 토큰은 재시작할 때 바뀐다.
-3. **데모 시나리오 실행**을 누른다. 실제 HTTP 요청 12건으로 정상 조회와 차단 결과를 확인한다.
-4. 키를 발급해 직접 호출하고, 콘솔에서 폐기한 뒤 같은 키의 요청이 거부되는지 확인한다.
-
-데모는 `127.0.0.1:8810` 게이트웨이와 `127.0.0.1:8811` 합성 CRM을 실행한다. 실제 개인정보나 외부 서비스 토큰은 사용하지 않는다. 사용 포트는 `--port`, `--upstream-port`로 바꿀 수 있다. 상태는 `.relayguard/demo.db`에 보관되며 `Ctrl+C`로 종료한다. 이전 릴레이 키와 감사 기록은 재시작 후에도 남는다.
+Python 데모는 기본적으로 `127.0.0.1:8810` 게이트웨이와 `127.0.0.1:8811` 합성 CRM을 실행한다. 사용 포트는 `--port`, `--upstream-port`로 바꿀 수 있다. 상태는 `.relayguard/demo.db`에 보관되며 콘솔 사용법과 종료 방법은 위와 같다.
 
 ![실제 로컬 시나리오를 실행한 관리 콘솔](docs/dashboard.jpg)
 
@@ -117,22 +135,36 @@ python -m build --no-isolation
 
 GitHub Actions의 `verify` 워크플로는 Python 3.11, 3.12, 3.13에서 테스트, 실제 HTTP 시나리오, 패키지 빌드, 알려진 런타임 의존성 취약점 검사를 수행한다. 원격 실행 결과는 [Actions](https://github.com/kwakhyun/relayguard/actions/workflows/ci.yml)에서 확인한다.
 
+[컨테이너 워크플로](https://github.com/kwakhyun/relayguard/actions/workflows/container.yml)는 amd64와 arm64 러너에서 이미지를 빌드하고 실행 검증한 뒤 GHCR에 게시한다. 실행 결과와 빌드 digest는 해당 워크플로에서 확인한다.
+
 ## 운영에 연결
 
 ```bash
 export RELAYGUARD_UPSTREAM_URL='https://your-api.example.com'
 export RELAYGUARD_UPSTREAM_TOKEN='replace-with-provider-token'
-export RELAYGUARD_ADMIN_TOKEN="$(relayguard generate-admin-token)"
-export RELAYGUARD_DB='/private/state/relayguard.db'
-relayguard serve --host 127.0.0.1 --port 8810
+export RELAYGUARD_ADMIN_TOKEN="$(docker run --rm \
+  ghcr.io/kwakhyun/relayguard:0.1.1 relayguard generate-admin-token)"
+
+docker run -d --name relayguard --restart unless-stopped \
+  -p 127.0.0.1:8810:8810 \
+  --env RELAYGUARD_UPSTREAM_URL --env RELAYGUARD_UPSTREAM_TOKEN \
+  --env RELAYGUARD_ADMIN_TOKEN \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --mount type=volume,source=relayguard-data,target=/data \
+  ghcr.io/kwakhyun/relayguard:0.1.1
 ```
 
-예제의 원본 토큰은 실제 비밀 저장소에서 주입한다. `.env.example`은 변수 설명용이며 자동으로 읽지 않는다. 일반 모드에는 데모 실행 기능이 없다. 외부 공개 전 TLS, 네트워크 접근 제한, 로그/디스크 관리가 필요하며 [배포 지침](docs/deployment.md)에 구체적인 설정과 Docker Compose 구성을 제공한다. 직접 TLS로 연결하면 실제 peer IP를 유지할 수 있다.
+관리자 토큰은 안전하게 보관해 콘솔 로그인에 사용한다. 예제의 원본 토큰은 실제 비밀 저장소에서 주입한다. 이미지는 UID/GID `10001:10001`로 실행되며 DB를 `/data/relayguard.db`에 보관한다. 일반 모드에는 데모 실행 기능이 없다.
+
+저장소의 `compose.yaml`도 같은 공개 이미지를 사용한다. 위 세 환경변수를 설정한 뒤 저장소 디렉터리에서 실행한다.
 
 ```bash
-relayguard serve --host 0.0.0.0 --port 8810 \
-  --tls-cert /run/tls/fullchain.pem --tls-key /run/tls/privkey.pem
+docker compose pull
+docker compose up -d
 ```
+
+Compose는 `.env`를 자동으로 읽지만 Python CLI는 읽지 않는다. 외부 공개 전 TLS와 접근 제어를 구성한다. 직접 TLS, Python 배포, 볼륨 관리와 로컬 이미지 빌드는 [배포 지침](docs/deployment.md)에 설명했다.
 
 ## 보호 범위와 남은 한계
 

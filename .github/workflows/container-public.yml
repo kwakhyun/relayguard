@@ -1,0 +1,39 @@
+name: verify public container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/kwakhyun/relayguard
+
+jobs:
+  anonymous-pull:
+    name: Anonymous pull and run (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Pull without registry credentials and exercise the public image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/relayguard-anonymous-docker
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s\n' '{"auths":{}}' > "$DOCKER_CONFIG/config.json"
+          VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
+          docker pull "$IMAGE:$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:$VERSION")" = "$GITHUB_SHA"
+          python3 scripts/container_smoke.py "$IMAGE:$VERSION"
+          docker image inspect --format '{{json .RepoDigests}}' "$IMAGE:$VERSION"

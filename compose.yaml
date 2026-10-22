@@ -1,6 +1,6 @@
 services:
   relayguard:
-    build: .
+    image: ${RELAYGUARD_IMAGE:-ghcr.io/kwakhyun/relayguard:0.1.1}
     ports:
       - "127.0.0.1:8810:8810"
     environment:

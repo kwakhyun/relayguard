@@ -1,6 +1,5 @@
 import argparse
 import os
-from pathlib import Path
 import secrets
 import socket
 import threading
@@ -23,7 +22,9 @@ def config(app, host, port, cert=None, key=None):
 def main():
     parser = argparse.ArgumentParser(description="RelayGuard credential boundary")
     sub = parser.add_subparsers(dest="command", required=True)
-    demo = sub.add_parser("demo", help="Start gateway + synthetic CRM on loopback")
+    demo = sub.add_parser("demo", help="Start gateway + synthetic CRM (loopback by default)")
+    demo.add_argument("--host", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1",
+                      help="Gateway bind address; use 0.0.0.0 inside a container")
     demo.add_argument("--port", type=int, default=8810)
     demo.add_argument("--upstream-port", type=int, default=8811)
     demo.add_argument("--db", default=".relayguard/demo.db")
@@ -53,10 +54,10 @@ def main():
     if not (1024 <= args.port <= 65535 and 1024 <= args.upstream_port <= 65535) or args.port == args.upstream_port:
         parser.error("Choose distinct ports between 1024 and 65535")
     # Preflight avoids printing usable-looking instructions for a port conflict.
-    for port in (args.port, args.upstream_port):
+    for host, port in ((args.host, args.port), ("127.0.0.1", args.upstream_port)):
         try:
             with socket.socket() as sock:
-                sock.bind(("127.0.0.1", port))
+                sock.bind((host, port))
         except OSError:
             parser.error(f"Local port {port} is unavailable")
     admin_token, upstream_token = secrets.token_urlsafe(48), secrets.token_urlsafe(48)
@@ -78,7 +79,7 @@ def main():
           f"Admin token (local demo only; regenerated on restart):\n{admin_token}\n"
           "Paste the token in the dashboard, then run the verification scenarios.\n", flush=True)
     try:
-        uvicorn.Server(config(create_app(settings), "127.0.0.1", args.port)).run()
+        uvicorn.Server(config(create_app(settings), args.host, args.port)).run()
     finally:
         upstream.should_exit = True
         thread.join(timeout=5)
