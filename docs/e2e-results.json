@@ -1,0 +1,96 @@
+{
+  "scenarios": [
+    {
+      "name": "허용한 고객 조회",
+      "expected_status": 200,
+      "actual_status": 200,
+      "passed": true,
+      "reason": "allowed"
+    },
+    {
+      "name": "대량 내보내기 경로 차단",
+      "expected_status": 403,
+      "actual_status": 403,
+      "passed": true,
+      "reason": "route_denied"
+    },
+    {
+      "name": "허용하지 않은 쓰기 차단",
+      "expected_status": 403,
+      "actual_status": 403,
+      "passed": true,
+      "reason": "route_denied"
+    },
+    {
+      "name": "미등록 쿼리 차단",
+      "expected_status": 403,
+      "actual_status": 403,
+      "passed": true,
+      "reason": "query_denied"
+    },
+    {
+      "name": "큰 응답 전체 보류",
+      "expected_status": 413,
+      "actual_status": 413,
+      "passed": true,
+      "reason": "response_too_large"
+    },
+    {
+      "name": "호출 예산 첫 요청",
+      "expected_status": 200,
+      "actual_status": 200,
+      "passed": true,
+      "reason": "allowed"
+    },
+    {
+      "name": "호출 예산 초과 차단",
+      "expected_status": 429,
+      "actual_status": 429,
+      "passed": true,
+      "reason": "rate_limit"
+    },
+    {
+      "name": "반출 예산 첫 응답",
+      "expected_status": 200,
+      "actual_status": 200,
+      "passed": true,
+      "reason": "allowed"
+    },
+    {
+      "name": "누적 반출 예산 초과 차단",
+      "expected_status": 429,
+      "actual_status": 429,
+      "passed": true,
+      "reason": "byte_budget"
+    },
+    {
+      "name": "해지된 키 차단",
+      "expected_status": 401,
+      "actual_status": 401,
+      "passed": true,
+      "reason": "token_revoked"
+    },
+    {
+      "name": "허용 대역 밖 요청 차단",
+      "expected_status": 403,
+      "actual_status": 403,
+      "passed": true,
+      "reason": "ip_denied"
+    },
+    {
+      "name": "업스트림 리디렉션 차단",
+      "expected_status": 502,
+      "actual_status": 502,
+      "passed": true,
+      "reason": "upstream_redirect"
+    }
+  ],
+  "passed": true,
+  "audit": {
+    "valid": true,
+    "event_count": 27,
+    "head_hash": "89503ce8b9abeb13b8aefc2a27d33ee8d79194bd6410eb609eb2d495dee5d7ec"
+  },
+  "admin_boundary_passed": true,
+  "transport": "real-loopback-http"
+}

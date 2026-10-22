@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "relayguard"
+version = "0.1.0"
+description = "Self-hosted scoped credential gateway with atomic data budgets and auditable revocation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "RelayGuard contributors"}]
+dependencies = ["fastapi==0.160.0", "httpx==0.28.1", "uvicorn==0.54.0", "pydantic==2.14.1"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "build==1.6.1", "pip-audit==2.10.1"]
+
+[project.scripts]
+relayguard = "relayguard.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kwakhyun/relayguard"
+Repository = "https://github.com/kwakhyun/relayguard"
+Issues = "https://github.com/kwakhyun/relayguard/issues"
+Changelog = "https://github.com/kwakhyun/relayguard/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+relayguard = ["static/*.html", "static/*.js", "static/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"

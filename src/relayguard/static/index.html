@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f7f8f4">
+  <title>RelayGuard — 자격 증명 보호 콘솔</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 이동</a>
+  <aside class="sidebar" aria-label="주 메뉴">
+    <a class="brand" href="#overview" aria-label="RelayGuard 홈"><span class="brand-mark" aria-hidden="true">R</span><span>RelayGuard<small>SECURITY WORKSPACE</small></span></a>
+    <div class="workspace"><span class="workspace-icon" aria-hidden="true">↗</span><div><strong>API Relay</strong><span id="environment-label">환경 확인 중</span></div><span class="workspace-dot" aria-hidden="true"></span></div>
+    <p class="nav-label">WORKSPACE</p>
+    <nav>
+      <a class="nav-link active" href="#overview"><span aria-hidden="true">▦</span>보안 개요</a>
+      <a class="nav-link" href="#credentials"><span aria-hidden="true">⚿</span>릴레이 키</a>
+      <a class="nav-link" href="#activity"><span aria-hidden="true">≋</span>요청 기록</a>
+      <a class="nav-link" href="#audit"><span aria-hidden="true">◇</span>감사 무결성</a>
+    </nav>
+    <div class="sidebar-note"><span class="note-icon" aria-hidden="true">⌁</span><strong>원본 키는 서버에.</strong><p>클라이언트에는 필요한 권한과 유효 기간만 담은 릴레이 키를 전달합니다.</p><span class="small-tag">SCOPED BY DESIGN</span></div>
+    <div class="sidebar-footer"><span class="open-source-dot" aria-hidden="true"></span>Open source · MIT<span>v0.1</span></div>
+  </aside>
+
+  <div class="app-shell">
+    <header class="topbar"><div class="breadcrumb">워크스페이스 <span aria-hidden="true">/</span> <strong>보안 콘솔</strong></div><div class="top-actions"><span class="connection-status" id="connection-status"><span class="status-dot" aria-hidden="true"></span>연결 안 됨</span><button class="button button-small button-secondary" id="connect-button">관리자 연결</button><button class="button button-small button-secondary" id="disconnect-button" hidden>연결 해제</button></div></header>
+    <main id="main">
+      <section id="overview" class="overview-section" aria-labelledby="page-title">
+        <div class="page-heading"><div><p class="eyebrow">ACCESS, UNDER CONTROL</p><h1 id="page-title">보안 개요</h1><p class="subtitle">서비스 접근 권한을 좁히고, 모든 요청의 근거를 남기세요.</p></div><div class="heading-actions"><span id="last-updated" class="muted small">연결 후 데이터를 불러옵니다</span><button id="refresh-button" class="button button-secondary" disabled><span aria-hidden="true">↻</span> 새로고침</button></div></div>
+        <div id="global-error" class="notice notice-error" role="alert" hidden></div>
+        <div id="demo-banner" class="demo-banner" hidden><div class="demo-copy"><span class="badge badge-teal">DEMO ONLY</span><p>로컬 합성 CRM으로 검증합니다. 실제 고객 데이터는 사용하지 않습니다.</p></div><button id="demo-button" class="button button-dark" disabled><span aria-hidden="true">▷</span> 차단 시나리오 실행</button></div>
+        <div id="session-gate" class="session-gate"><div class="gate-icon" aria-hidden="true">⌘</div><div><h2>관리자 토큰으로 워크스페이스에 연결하세요</h2><p>토큰은 이 탭의 메모리에만 보관하며, 연결을 해제하면 즉시 지웁니다.</p></div><button class="button button-primary" id="gate-connect-button">관리자 연결 <span aria-hidden="true">↗</span></button></div>
+        <div class="stats-grid" aria-label="요청 통계">
+          <article class="stat-card"><div class="stat-label">활성 릴레이 키<span class="stat-icon" aria-hidden="true">⚿</span></div><p class="stat-value" id="stat-active">—</p><p class="stat-caption">현재 사용할 수 있는 자격 증명</p></article>
+          <article class="stat-card"><div class="stat-label">전체 프록시 요청<span class="stat-icon" aria-hidden="true">↗</span></div><p class="stat-value" id="stat-total">—</p><p class="stat-caption"><span class="tiny-dot teal" aria-hidden="true"></span>허용 <strong id="stat-allowed">—</strong>건</p></article>
+          <article class="stat-card stat-blocked"><div class="stat-label">차단된 요청<span class="stat-icon" aria-hidden="true">⊘</span></div><p class="stat-value" id="stat-blocked">—</p><p class="stat-caption">정책 및 할당량으로 거부된 요청</p></article>
+          <article class="stat-card"><div class="stat-label">전달한 응답 데이터<span class="stat-icon" aria-hidden="true">⇄</span></div><p class="stat-value" id="stat-bytes">—</p><p class="stat-caption">허용된 요청의 누적 응답 크기</p></article>
+        </div>
+        <div class="relay-strip"><div><span class="tiny-dot teal" aria-hidden="true"></span><span>CLIENT</span><span class="flow-line" aria-hidden="true">─────</span><strong>RelayGuard</strong><span class="flow-line" aria-hidden="true">─────</span><span>UPSTREAM</span></div><p id="upstream-origin">연결 후 업스트림 표시</p><span class="relay-meta">경로 제한 / 사용량 제한 / 감사 기록</span></div>
+        <section id="demo-results" class="panel demo-results" aria-labelledby="demo-results-title" hidden><div class="panel-heading"><div><h2 id="demo-results-title">시나리오 검증 결과</h2><p>실제 릴레이 엔드포인트의 응답을 기대 상태 코드와 비교합니다.</p></div><span id="demo-result-badge" class="badge"></span></div><div id="scenario-list" class="scenario-list"></div></section>
+      </section>
+
+      <section id="credentials" class="panel" aria-labelledby="credentials-title">
+        <div class="panel-heading"><div><div class="title-row"><h2 id="credentials-title">릴레이 키</h2><span id="credential-count" class="count-badge">—</span></div><p>서비스별로 접근 범위와 사용량을 정하고, 필요할 때 즉시 폐기하세요.</p></div><button id="create-key-button" class="button button-primary" disabled><span aria-hidden="true">＋</span> 키 발급</button></div>
+        <div class="table-wrap"><table class="credentials-table"><caption class="sr-only">발급한 릴레이 키와 권한 정책</caption><thead><tr><th scope="col">이름 / 키 접두사</th><th scope="col">허용 경로</th><th scope="col">사용량 제한</th><th scope="col">만료 일시</th><th scope="col">상태</th><th scope="col"><span class="sr-only">작업</span></th></tr></thead><tbody id="credentials-body"></tbody></table></div>
+        <div class="empty-state" id="credentials-empty"><span class="empty-icon" aria-hidden="true">⚿</span><strong>연결 후 릴레이 키를 확인할 수 있습니다</strong><p>발급한 키의 권한과 유효 기간이 이곳에 표시됩니다.</p></div>
+        <div class="panel-footnote"><span aria-hidden="true">ⓘ</span> 키 원문은 발급 직후 한 번만 표시됩니다. 서버에는 해시만 저장됩니다.</div>
+      </section>
+
+      <section id="activity" class="panel" aria-labelledby="activity-title">
+        <div class="panel-heading activity-heading"><div><h2 id="activity-title">최근 활동</h2><p>요청과 키 변경 이력의 메타데이터입니다. 본문과 원본 토큰은 기록하지 않습니다.</p></div><div class="filter-group" aria-label="활동 결과 필터"><button class="filter-button selected" data-decision="" aria-pressed="true" disabled>전체</button><button class="filter-button" data-decision="allow" aria-pressed="false" disabled>허용</button><button class="filter-button" data-decision="deny" aria-pressed="false" disabled>차단</button><button class="filter-button" data-decision="error" aria-pressed="false" disabled>오류</button></div></div>
+        <div class="table-wrap"><table class="events-table"><caption class="sr-only">최근 100건의 감사 기록</caption><thead><tr><th scope="col">시간</th><th scope="col">결과</th><th scope="col">요청 / 작업</th><th scope="col">사유</th><th scope="col">HTTP</th><th scope="col">응답 크기</th></tr></thead><tbody id="events-body"></tbody></table></div>
+        <div class="empty-state" id="events-empty"><span class="empty-icon" aria-hidden="true">≋</span><strong>아직 표시할 활동이 없습니다</strong><p>관리자 연결 후 실제 기록을 불러옵니다.</p></div>
+        <div class="panel-footnote"><span id="event-count">기록 0건</span><span>최신 100건 표시 · 시간은 브라우저 시간대 기준</span></div>
+      </section>
+
+      <section id="audit" class="audit-panel" aria-labelledby="audit-title"><div class="audit-emblem" aria-hidden="true">◇</div><div class="audit-content"><div class="title-row"><h2 id="audit-title">감사 로그 무결성</h2><span class="badge badge-neutral" id="audit-badge">확인 전</span></div><p id="audit-description">기록을 해시 체인으로 연결해 저장된 로그의 일관성을 검증합니다.</p><div class="audit-hash"><span>HEAD HASH</span><code id="audit-hash">관리자 연결 후 표시됩니다</code></div><p class="audit-limit">해시 체인만으로 로그 전체 재작성이나 삭제를 방지할 수 없습니다. 외부 보관한 해시와 함께 확인하세요.</p></div><div class="audit-actions"><button id="verify-button" class="button button-secondary" disabled>무결성 검증 <span aria-hidden="true">↗</span></button><button id="export-button" class="button button-quiet" disabled>JSON 내보내기 ↓</button></div></section>
+      <footer class="page-footer"><span>RelayGuard <span aria-hidden="true">/</span> 최소 권한으로 연결하는 API</span><span>원본 키 비공개 · 명시적 허용 · 즉시 폐기</span></footer>
+    </main>
+  </div>
+
+  <dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><div class="dialog-heading"><div><p class="eyebrow">ADMIN SESSION</p><h2 id="connect-title">워크스페이스 연결</h2></div><button type="button" class="icon-button" data-close="connect-dialog" aria-label="닫기">×</button></div><p class="dialog-description">서버 설정의 관리자 토큰을 입력하세요. 이 탭을 닫거나 새로고침하면 다시 연결해야 합니다.</p><label for="admin-token">관리자 토큰</label><input id="admin-token" type="password" autocomplete="off" spellcheck="false" required placeholder="관리자 토큰 입력"><p class="field-help">URL, 쿠키, 브라우저 저장소에 저장하지 않습니다.</p><div id="connect-error" class="notice notice-error" role="alert" hidden></div><div class="dialog-actions"><button type="button" class="button button-secondary" data-close="connect-dialog">취소</button><button type="submit" class="button button-primary" id="connect-submit">연결하기</button></div></form></dialog>
+
+  <dialog id="create-dialog" class="wide-dialog" aria-labelledby="create-title"><form id="create-form"><div class="dialog-heading"><div><p class="eyebrow">LEAST PRIVILEGE</p><h2 id="create-title">릴레이 키 발급</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="닫기">×</button></div><p class="dialog-description">이 키가 수행할 작업만 명시적으로 허용하세요. 입력한 정책은 서버에서 다시 검증합니다.</p><div class="form-grid"><div><label for="key-name">키 이름</label><input id="key-name" name="name" required maxlength="80" placeholder="예: 고객 조회 서비스"></div><div><label for="key-ttl">유효 시간</label><div class="input-unit"><input id="key-ttl" type="number" min="1" max="720" step="1" value="24" required><span>시간</span></div></div></div><label for="key-routes">허용할 메서드와 경로 <span class="label-hint">한 줄에 하나씩</span></label><textarea id="key-routes" rows="3" spellcheck="false" required>GET /customers
+GET /customers/*</textarea><p class="field-help">예: GET /customers/* — *는 비어 있지 않은 경로 한 단계만 허용합니다.</p><div class="form-grid"><div><label for="key-query">허용할 쿼리 키 <span class="label-hint">선택</span></label><input id="key-query" spellcheck="false" placeholder="예: page, limit"><p class="field-help">쉼표로 구분합니다. 모든 경로에 동일하게 적용합니다.</p></div><div><label for="key-ips">허용 IP / CIDR <span class="label-hint">선택</span></label><input id="key-ips" spellcheck="false" placeholder="예: 127.0.0.1/32, ::1/128"><p class="field-help">비워 두면 IP 주소로 제한하지 않습니다.</p></div></div><div class="form-divider"></div><div class="form-grid three-columns"><div><label for="key-rate">분당 요청 수</label><input id="key-rate" type="number" min="1" max="10000" step="1" value="30" required></div><div><label for="key-response">응답당 최대 바이트</label><input id="key-response" type="number" min="128" max="1048576" step="1" value="16384" required></div><div><label for="key-budget">분당 응답 바이트</label><input id="key-budget" type="number" min="128" max="104857600" step="1" value="65536" required></div></div><p class="field-help">사용량은 UTC 기준 매 분 초기화됩니다. 제한을 넘는 응답은 전달하지 않습니다.</p><div id="create-error" class="notice notice-error" role="alert" hidden></div><div class="dialog-actions"><button type="button" class="button button-secondary" data-close="create-dialog">취소</button><button type="submit" class="button button-primary" id="create-submit">키 발급하기</button></div></form></dialog>
+
+  <dialog id="key-dialog" aria-labelledby="key-title"><div class="dialog-heading"><div><p class="eyebrow">ONE-TIME SECRET</p><h2 id="key-title">릴레이 키가 발급되었습니다</h2></div><button type="button" class="icon-button" data-close="key-dialog" aria-label="키를 지우고 닫기">×</button></div><p class="dialog-description">이 키는 지금 한 번만 표시됩니다. 안전한 비밀 저장소에 보관하세요. 창을 닫으면 다시 조회할 수 없습니다.</p><div class="secret-box"><code id="new-key"></code></div><div id="copy-feedback" class="field-help" role="status"></div><div class="dialog-actions"><button id="copy-key-button" class="button button-secondary">키 복사</button><button class="button button-primary" data-close="key-dialog">저장했습니다</button></div></dialog>
+
+  <dialog id="revoke-dialog" aria-labelledby="revoke-title"><form id="revoke-form"><div class="dialog-heading"><h2 id="revoke-title">이 릴레이 키를 폐기할까요?</h2><button type="button" class="icon-button" data-close="revoke-dialog" aria-label="닫기">×</button></div><p class="dialog-description"><strong id="revoke-name"></strong> 키를 사용하는 클라이언트의 다음 요청부터 차단됩니다. 폐기한 키는 다시 활성화할 수 없습니다.</p><div id="revoke-error" class="notice notice-error" role="alert" hidden></div><div class="dialog-actions"><button type="button" class="button button-secondary" data-close="revoke-dialog">취소</button><button type="submit" class="button button-danger" id="revoke-submit">키 폐기</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

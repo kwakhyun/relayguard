@@ -1,0 +1,28 @@
+services:
+  relayguard:
+    build: .
+    ports:
+      - "127.0.0.1:8810:8810"
+    environment:
+      RELAYGUARD_UPSTREAM_URL: ${RELAYGUARD_UPSTREAM_URL:?Set an HTTPS upstream origin}
+      RELAYGUARD_UPSTREAM_TOKEN: ${RELAYGUARD_UPSTREAM_TOKEN:?Set the provider credential}
+      RELAYGUARD_ADMIN_TOKEN: ${RELAYGUARD_ADMIN_TOKEN:?Set a random admin credential}
+      RELAYGUARD_DB: /data/relayguard.db
+    volumes:
+      - relayguard-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8810/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  relayguard-data:
