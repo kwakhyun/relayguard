@@ -135,7 +135,7 @@ python -m build --no-isolation
 
 GitHub Actions의 `verify` 워크플로는 Python 3.11, 3.12, 3.13에서 테스트, 실제 HTTP 시나리오, 패키지 빌드, 알려진 런타임 의존성 취약점 검사를 수행한다. 원격 실행 결과는 [Actions](https://github.com/kwakhyun/relayguard/actions/workflows/ci.yml)에서 확인한다.
 
-[컨테이너 워크플로](https://github.com/kwakhyun/relayguard/actions/workflows/container.yml)는 amd64와 arm64 러너에서 이미지를 빌드하고 실행 검증한 뒤 GHCR에 게시한다. 실행 결과와 빌드 digest는 해당 워크플로에서 확인한다.
+[컨테이너 워크플로](https://github.com/kwakhyun/relayguard/actions/workflows/container.yml)는 amd64와 arm64 러너에서 이미지를 빌드하고 실행 검증한다. 버전 태그에서는 Python 검증까지 통과해야 GHCR에 게시한다. [공개 이미지 검증](https://github.com/kwakhyun/relayguard/actions/workflows/container-public.yml)은 레지스트리 로그인 없이 내려받은 이미지를 실행한다. 실행 결과와 빌드 digest는 해당 워크플로에서 확인한다.
 
 ## 운영에 연결
 

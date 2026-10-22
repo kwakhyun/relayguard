@@ -18,6 +18,17 @@
 
 원본 실행 데이터: [E2E JSON](e2e-results.json), [의존성 검사 JSON](dependency-audit.json), [실제 화면](dashboard.jpg).
 
+## 컨테이너 검증
+
+2026-10-23, [GitHub Actions 실행 39852565685](https://github.com/kwakhyun/relayguard/actions/runs/39852565685)에서 `linux/amd64`와 `linux/arm64` 이미지를 각 아키텍처의 Ubuntu 러너에서 빌드하고 실행했다. 두 환경에서 아래 검사를 통과했다.
+
+- 실제 HTTP 시나리오 12개, 대시보드와 정적 파일, 관리자/릴레이 키의 인증 경계.
+- 실행 UID/GID `10001:10001`, 읽기 전용 루트, capability 제거, `NoNewPrivs`, DB 권한 `0600`.
+- 같은 named volume을 연결해 컨테이너를 재생성한 뒤 활성 키, 폐기 상태와 기존 감사 기록 보존.
+- 데모 관리자 토큰 재발급과 이전 관리자 토큰의 거부, 감사 해시 체인의 무결성.
+
+검증 스크립트는 `python scripts/container_smoke.py IMAGE`로 실행한다. Docker daemon에 빌드하거나 내려받은 이미지가 필요하며, 임시 컨테이너와 볼륨은 실행 후 정리한다. 공개 배포 후에는 [익명 다운로드 검증](https://github.com/kwakhyun/relayguard/actions/workflows/container-public.yml)을 해당 버전 태그에서 실행해, 레지스트리 로그인 없이 이미지 다운로드와 같은 검사를 수행한다.
+
 ## 의미 있는 실패 사례
 
 호출과 바이트 예산은 40~50개 동시 쓰기에서 한도를 넘지 않았다. 재시작 후 사용량과 폐기 상태를 유지했고, 감사 INSERT 실패 시 키 생성/폐기는 롤백됐다. 잘못된 경로 인코딩, 중복 쿼리, X-Forwarded-For 위조, 다른 키의 쿠키 재전송, 응답 크기 초과, upstream 리디렉션/압축/HTML, 응답 중 키 폐기, 총 시간 제한, 취소와 감사 실패를 검사했다.
@@ -26,7 +37,7 @@
 
 ## 확인하지 못했거나 보장하지 않는 범위
 
-- **Docker 실행:** CLI는 설치되어 있으나 Docker daemon socket이 없어 이미지 빌드와 Compose 실행은 하지 못했다. Dockerfile/Compose는 제공했지만 실행 검증 통과라고 표시하지 않는다.
+- **로컬 Docker와 Compose:** 로컬 macOS에는 Docker daemon socket이 없어 로컬 실행과 Compose 시작은 수행하지 않았다. 위 컨테이너 결과는 GitHub의 Linux 러너에서 직접 실행한 결과다.
 - **원격 CI:** 위 표는 로컬 Python 3.11 실행 기록이다. 공개 저장소의 Python 3.11/3.12/3.13별 실행 결과는 [GitHub Actions](https://github.com/kwakhyun/relayguard/actions/workflows/ci.yml)에서 확인한다. 릴리스 설명에 해당 버전의 검증 실행 링크를 제공한다.
 - **브라우저 다운로드 완료:** JSON API와 다운로드 시작 알림은 확인했다. 브라우저 도구가 최종 다운로드 파일 경로를 제공하지 못해 저장 완료는 확인하지 못했다. 별도 HTTP 내보내기의 JSON 내용과 해시 검증은 통과했다.
 - **독립 감사 및 운영 부하:** 외부 보안 업체의 감사, 실제 SaaS 연결, 성능/내구성 부하 시험, 인터넷 공개 배포는 수행하지 않았다.
