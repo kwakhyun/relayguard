@@ -202,3 +202,139 @@ def test_invalid_byte_charges_cannot_refund_budget(store, amount):
     credential = issue(store)["credential"]
     with pytest.raises(ValueError, match="Invalid byte charge"):
         store.spend_bytes(credential["id"], amount, time.time())
+
+
+def test_lifetime_usage_does_not_reset_with_minute_or_restart(store):
+    created = issue(store, requests_per_minute=1, bytes_per_minute=128,
+                    max_total_requests=2, max_total_bytes=256)
+    identifier = created["credential"]["id"]
+    now = int(time.time() // 60) * 60
+    assert created["credential"]["usage"] == {"total_requests": 0, "total_bytes": 0}
+    for moment in (now, now + 60):
+        assert store.reserve_request(identifier, moment) is None
+        assert store.spend_bytes(identifier, 128, moment) is None
+    reopened = Store(store.path)
+    assert reopened.reserve_request(identifier, now + 120) == "lifetime_request_limit"
+    assert reopened.spend_bytes(identifier, 1, now + 120) == "lifetime_byte_budget"
+    assert reopened.find_credential(created["token"])["usage"] == {"total_requests": 2, "total_bytes": 256}
+    assert reopened.list_credentials()[0]["usage"] == {"total_requests": 2, "total_bytes": 256}
+    assert reopened.revoke(identifier)["usage"] == {"total_requests": 2, "total_bytes": 256}
+
+
+def test_concurrent_lifetime_limits_never_overspend(store):
+    created = issue(store, requests_per_minute=100, bytes_per_minute=10000,
+                    max_total_requests=7, max_total_bytes=1024)
+    identifier = created["credential"]["id"]
+    now = time.time()
+    requests = concurrently(40, lambda: store.reserve_request(identifier, now))
+    responses = concurrently(40, lambda: store.spend_bytes(identifier, 128, now))
+    assert requests.count(None) == 7
+    assert requests.count("lifetime_request_limit") == 33
+    assert responses.count(None) == 8
+    assert responses.count("lifetime_byte_budget") == 32
+    assert store.find_credential(created["token"])["usage"] == {"total_requests": 7, "total_bytes": 1024}
+    with store.connection() as conn:
+        budget = conn.execute("SELECT sum(requests),sum(bytes) FROM budgets").fetchone()
+        assert tuple(budget) == (7, 1024)
+
+
+def test_minute_denials_do_not_charge_lifetime_usage(store):
+    created = issue(store, requests_per_minute=1, bytes_per_minute=128,
+                    max_total_requests=5, max_total_bytes=512)
+    identifier = created["credential"]["id"]
+    now = time.time()
+    assert store.reserve_request(identifier, now) is None
+    assert store.reserve_request(identifier, now) == "rate_limit"
+    assert store.spend_bytes(identifier, 100, now) is None
+    assert store.spend_bytes(identifier, 100, now) == "byte_budget"
+    assert store.find_credential(created["token"])["usage"] == {"total_requests": 1, "total_bytes": 100}
+
+
+def test_lifetime_and_minute_updates_rollback_together(store):
+    created = issue(store, max_total_requests=5, max_total_bytes=512)
+    identifier = created["credential"]["id"]
+    with store.connection() as conn:
+        conn.executescript("""
+            CREATE TRIGGER reject_counters BEFORE UPDATE OF total_requests,total_bytes ON credentials
+            BEGIN SELECT RAISE(ABORT, 'counter unavailable'); END;
+        """)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.reserve_request(identifier, time.time())
+    with pytest.raises(sqlite3.IntegrityError):
+        store.spend_bytes(identifier, 128, time.time())
+    assert store.find_credential(created["token"])["usage"] == {"total_requests": 0, "total_bytes": 0}
+    with store.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM budgets").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("starting_workers", [1, 6])
+def test_legacy_database_migration_preserves_history_and_is_idempotent(tmp_path, starting_workers):
+    from relayguard.db import canonical, timestamp
+
+    path = tmp_path / "legacy.db"
+    token = "rg_synthetic_legacy_token"
+    now = time.time()
+    legacy_policy = Policy(routes=[RouteRule(method="GET", path="/customers")]).model_dump(
+        exclude={"max_total_requests", "max_total_bytes"})
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE credentials (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                secret_hash TEXT UNIQUE NOT NULL, prefix TEXT NOT NULL, created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL, revoked_at TEXT, policy TEXT NOT NULL);
+            CREATE TABLE budgets (credential_id TEXT NOT NULL, window INTEGER NOT NULL,
+                requests INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(credential_id,window), FOREIGN KEY(credential_id) REFERENCES credentials(id));
+        """)
+        conn.execute("INSERT INTO credentials VALUES (?,?,?,?,?,?,?,?)", (
+            "legacy", "Synthetic legacy", hashlib.sha256(token.encode()).hexdigest(), token[:11],
+            timestamp(now - 120), timestamp(now + 3600), None, canonical(legacy_policy)))
+        conn.executemany("INSERT INTO budgets VALUES (?,?,?,?)", [
+            ("legacy", int(now // 60) - 2, 3, 256), ("legacy", int(now // 60) - 1, 2, 384)])
+    # All workers start against the same old schema.  The backfill must happen
+    # once, including when independent connections race to inspect its columns.
+    workers = concurrently(starting_workers, lambda: Store(path))
+    assert all(worker.find_credential(token)["usage"] == {"total_requests": 5, "total_bytes": 640}
+               for worker in workers)
+    migrated = workers[0]
+    assert migrated.find_credential(token)["usage"] == {"total_requests": 5, "total_bytes": 640}
+    assert "max_total_requests" not in migrated.find_credential(token)["policy"]
+    assert migrated.reserve_request("legacy", now) is None
+    assert migrated.spend_bytes("legacy", 128, now) is None
+    assert Store(path).find_credential(token)["usage"] == {"total_requests": 6, "total_bytes": 768}
+    with migrated.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM budgets").fetchone()[0] == 3
+
+
+def test_unlimited_lifetime_defaults_still_track_usage(store):
+    created = issue(store)
+    identifier = created["credential"]["id"]
+    now = time.time()
+    assert store.reserve_request(identifier, now) is None
+    assert store.spend_bytes(identifier, 200, now) is None
+    assert store.find_credential(created["token"])["usage"] == {"total_requests": 1, "total_bytes": 200}
+
+
+@pytest.mark.parametrize("operation", ["request", "bytes"])
+def test_live_time_is_sampled_after_writer_lock_for_expiry(store, monkeypatch, operation):
+    from contextlib import contextmanager
+
+    created = issue(store)
+    expires = datetime.fromisoformat(created["credential"]["expires_at"]).timestamp()
+    clock = [expires - 1]
+    original = store.connection
+
+    @contextmanager
+    def after_lock(write=False):
+        with original(write=write) as conn:
+            if write:
+                # Simulate a lock wait spanning expiration.  Sampling before
+                # acquiring this transaction would incorrectly allow the call.
+                clock[0] = expires + 1
+            yield conn
+
+    monkeypatch.setattr(store, "connection", after_lock)
+    monkeypatch.setattr("relayguard.db.time.time", lambda: clock[0])
+    result = (store.reserve_request(created["credential"]["id"]) if operation == "request"
+              else store.spend_bytes(created["credential"]["id"], 128))
+    assert result == "token_expired"
+    assert store.find_credential(created["token"])["usage"] == {"total_requests": 0, "total_bytes": 0}

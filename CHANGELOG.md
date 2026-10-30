@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 — 2026-10-30
+
+Public preview for bounded HTTP integrations. Stop all older workers and back up the database before upgrading; see [upgrade instructions](docs/deployment.md#v020으로-업그레이드).
+
+- Optional persistent lifetime request and response-byte caps, with atomic legacy usage migration.
+- Offline policy checks against explicit allow/deny cases, configuration validation and storage readiness.
+- Mounted secret-file support and configurable request size and upstream deadline.
+- SQLite operations off the async event loop and expiry checked after acquiring the write lock.
+- English onboarding, an explicit comparison with existing tools and documented adoption limits.
+- Console async regression tests and actual installed-wheel smoke checks in CI.
+
+- Task-focused Korean console with separate overview, key management, activity and audit views.
+- Two-step key creation, readable data limits, complete policy details and searchable key lists.
+- Explicit one-time key storage confirmation and revocation target identification.
+- Responsive mobile cards, keyboard focus management, accessible labels and local Lucide icons.
+- Recoverable section errors, bounded requests and protection against stale responses and duplicate actions.
+
 ## 0.1.1 — 2026-10-23
 
 - GHCR container images for `linux/amd64` and `linux/arm64`, with version, `latest` and commit tags.

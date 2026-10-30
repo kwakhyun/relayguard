@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {"name": "read customers", "method": "GET", "path": "/customers?limit=2", "peer_ip": "127.0.0.1", "expected": "allow"},
+    {"name": "read without query", "method": "GET", "path": "/customers", "peer_ip": "::1", "expected": "allow"},
+    {"name": "writes are denied", "method": "POST", "path": "/customers", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "export path is denied", "method": "GET", "path": "/exports", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "unlisted query is denied", "method": "GET", "path": "/customers?export=true", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "duplicate query is denied", "method": "GET", "path": "/customers?limit=2&limit=3", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "encoded query key is denied", "method": "GET", "path": "/customers?%6cimit=2", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "encoded path is denied", "method": "GET", "path": "/%63ustomers?limit=2", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "nested path is denied", "method": "GET", "path": "/customers/123/export", "peer_ip": "127.0.0.1", "expected": "deny"},
+    {"name": "query values are not authorization", "method": "GET", "path": "/customers?limit=999999", "peer_ip": "127.0.0.1", "expected": "allow"}
+  ]
+}

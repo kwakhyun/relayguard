@@ -1,10 +1,11 @@
 # HTTP API
 
-All `/api/*` requests require one `Authorization: Bearer <admin token>` header. `/proxy/*` requires a **different scoped relay key**. There are no session cookies, CORS grants, public API docs, or query-string credentials. `/healthz` and local static assets are public. All responses are `Cache-Control: no-store`.
+All `/api/*` requests require one `Authorization: Bearer <admin token>` header. `/proxy/*` requires a **different scoped relay key**. There are no session cookies, CORS grants, public API docs, or query-string credentials. `/healthz`, `/readyz` and local static assets are public. All responses are `Cache-Control: no-store`.
 
 | Method and path | Input | Output |
 | --- | --- | --- |
-| `GET /healthz` | none | `status`, `service`, `demo_mode` |
+| `GET /healthz` | none | `status`, `service`, `demo_mode` (process liveness) |
+| `GET /readyz` | none | 200 `status: ready`, `service`; 503 `storage_not_ready` if local storage cannot accept a write transaction |
 | `GET /api/overview` | admin | `demo_mode`, `upstream_origin`, `stats`, `audit`, `recent_events` |
 | `GET /api/credentials` | admin | `{items: [credential]}` without token or hash |
 | `POST /api/credentials` | `name`, `ttl_hours`, `policy` | 201 `{credential, token}`; token shown once |
@@ -25,6 +26,7 @@ Credential creation example: `examples/read-only-policy.json`. TTL is 1–720 ho
 - Query keys are unique ASCII identifiers. Unknown or repeated keys, encoded aliases, malformed escapes, controls, ambiguous separators, and excessively long queries are rejected. UTF-8 values are re-encoded canonically. Values are **not** a data-level authorization policy.
 - `ip_allowlist` is optional. Empty means no IP restriction. Entries are strict CIDRs. The socket peer is used; forwarded headers are never trusted. IPv4-mapped IPv6 is normalized for IPv4 CIDRs.
 - `requests_per_minute`: 1–10,000; `response_bytes_limit`: 128–1,048,576; `bytes_per_minute`: 128–104,857,600.
+- Optional `max_total_requests`: 1–1,000,000,000; `max_total_bytes`: 128–1,000,000,000,000. Omitted or `null` means no lifetime cap. They persist across minute boundaries and restarts; keys do not share a global budget. Public credentials include `usage.total_requests` and `usage.total_bytes`.
 - Requests are charged when a valid policy reserves a call, before the body/upstream finishes. Failed calls are not refunded. Bytes are charged after a complete bounded upstream response is received and before it is released. Failed client delivery is not refunded. Audit stats count admitted responses, not proof of bytes received by a client.
 - Budgets use separate **fixed UTC minute windows** for reservation and release. A request crossing a minute boundary charges the response in its release window. A byte denial occurs after fetching upstream data; it does not prevent upstream read cost or write side effects.
 
@@ -42,7 +44,7 @@ Proxy errors have `{error: {code, message}, request_id}` and `X-Request-ID`. No 
 | 403 | route, query, IP, path or request-header policy violation |
 | 408 | request body deadline exceeded |
 | 413 | request or upstream response exceeds size cap |
-| 429 | fixed-minute request or response-byte budget exhausted |
+| 429 | minute or lifetime budget exhausted (`lifetime_request_limit`, `lifetime_byte_budget` for lifetime caps) |
 | 431 | inbound headers exceed the application cap |
 | 502 | upstream error, timeout, redirect, compression or unsafe response |
 | 503 | storage or audit failure; upstream data withheld |
@@ -54,3 +56,9 @@ Transport-level failures rejected by the HTTP server before ASGI execution are o
 Events contain `id`, `ts`, `kind`, `credential_id`, `decision`, `reason`, `method`, matched policy `path`, `status`, `response_bytes`, `peer_ip`, `prev_hash`, `hash`. No raw request path identifier, query value, request/response body or authorization header is persisted by the gateway.
 
 Hash calculation: `SHA256(previous_hash + "\n" + canonical_json(payload))`. Canonical JSON uses Python `json.dumps(ensure_ascii=False, sort_keys=True, separators=(',', ':'))`; payload includes every event field except `prev_hash` and `hash`. The genesis hash is 64 zeros. This is a consistency chain, not a digital signature or immutable storage.
+
+## Preflight and readiness
+
+`relayguard policy check examples/read-only-policy.json --cases examples/policy-cases.json` runs the same static route, query and IP checks as the gateway. It does not authenticate, spend quotas or call upstream. See [examples](../examples/README.md). `relayguard check-config` validates environment settings and secret files without creating a database or probing the provider.
+
+`/readyz` opens the existing SQLite database, checks required tables and acquires then rolls back a write transaction with a 100 ms lock timeout. It can return 503 during write contention. It does not verify the entire audit chain, test upstream availability or promise a global filesystem deadline. Use `/healthz` for liveness and `/api/audit/verify` for explicit chain verification.

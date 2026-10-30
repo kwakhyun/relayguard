@@ -6,6 +6,8 @@
     "ip_allowlist": ["127.0.0.1/32", "::1/128"],
     "requests_per_minute": 30,
     "response_bytes_limit": 16384,
-    "bytes_per_minute": 65536
+    "bytes_per_minute": 65536,
+    "max_total_requests": 100,
+    "max_total_bytes": 1048576
   }
 }

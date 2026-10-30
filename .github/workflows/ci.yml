@@ -24,4 +24,17 @@ jobs:
       - run: python -m pytest -q
       - run: python scripts/e2e.py
       - run: python -m build --no-isolation
+      - run: python scripts/wheel_smoke.py
+      - name: Set up Node for console state regression tests
+        if: matrix.python == '3.12'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install development-only console test dependencies
+        if: matrix.python == '3.12'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify console async state transitions
+        if: matrix.python == '3.12'
+        run: npm test
       - run: python -m pip_audit -r requirements.lock --no-deps --disable-pip

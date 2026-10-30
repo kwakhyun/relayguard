@@ -1,8 +1,41 @@
 from dataclasses import dataclass, field
 import ipaddress
 import os
+from pathlib import Path
 import re
 from urllib.parse import urlsplit
+
+
+def secret_from_env(name):
+    """Read one bounded secret source, including read-only container secrets."""
+    value, filename = os.environ.get(name, ""), os.environ.get(name + "_FILE", "")
+    if value and filename:
+        raise ValueError(f"Set only {name} or {name}_FILE, not both")
+    if not filename:
+        return value
+    try:
+        path = Path(filename)
+        if not path.is_file():
+            raise ValueError("Secret source must be a regular file")
+        with path.open("rb") as source:
+            raw = source.read(8195)
+        if raw.endswith(b"\r\n"):
+            raw = raw[:-2]
+        elif raw.endswith(b"\n"):
+            raw = raw[:-1]
+        if not raw or len(raw) > 8192:
+            raise ValueError("Invalid secret length")
+        return raw.decode("ascii")
+    except (OSError, UnicodeError, ValueError):
+        # Neither secret contents nor a potentially sensitive filename belongs in logs.
+        raise ValueError(f"Cannot read a valid secret from {name}_FILE") from None
+
+
+def env_number(name, default, parser):
+    try:
+        return parser(os.environ.get(name, str(default)))
+    except ValueError:
+        raise ValueError(f"Invalid numeric value for {name}") from None
 
 
 @dataclass(frozen=True)
@@ -67,7 +100,9 @@ class Settings:
     def from_env(cls):
         return cls(
             upstream_url=os.environ.get("RELAYGUARD_UPSTREAM_URL", ""),
-            upstream_token=os.environ.get("RELAYGUARD_UPSTREAM_TOKEN", ""),
-            admin_token=os.environ.get("RELAYGUARD_ADMIN_TOKEN", ""),
+            upstream_token=secret_from_env("RELAYGUARD_UPSTREAM_TOKEN"),
+            admin_token=secret_from_env("RELAYGUARD_ADMIN_TOKEN"),
             database_path=os.environ.get("RELAYGUARD_DB", ".relayguard/relayguard.db"),
+            max_request_bytes=env_number("RELAYGUARD_MAX_REQUEST_BYTES", 65536, int),
+            upstream_timeout_seconds=env_number("RELAYGUARD_UPSTREAM_TIMEOUT_SECONDS", 5.0, float),
         )
