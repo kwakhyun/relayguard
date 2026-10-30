@@ -11,11 +11,14 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
+from . import __version__
 from .db import Store, timestamp
 from .demo import run_scenarios
 from .gateway import proxy_request
 from .models import CredentialCreate
+from .operations import storage_ready
 from .settings import Settings
 
 STATIC = Path(__file__).parent / "static"
@@ -57,8 +60,8 @@ class BoundaryMiddleware:
             status, code = 431, "headers_too_large"
             if is_proxy:
                 try:
-                    self.store.audit(kind="proxy", credential_id=None, decision="deny", reason=code,
-                                     path="[unmatched]", status=status)
+                    await run_in_threadpool(self.store.audit, kind="proxy", credential_id=None,
+                                            decision="deny", reason=code, path="[unmatched]", status=status)
                 except Exception:
                     status, code = 503, "audit_unavailable"
             response = error(status, code, "Request rejected.")
@@ -108,7 +111,7 @@ def create_app(settings: Settings, *, upstream_transport=None):
             app.state.upstream_client = client
             yield
 
-    app = FastAPI(title="RelayGuard", version="0.1.1", lifespan=lifespan,
+    app = FastAPI(title="RelayGuard", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     app.state.store, app.state.settings = store, settings
     app.state.demo_lock = asyncio.Lock()
@@ -139,6 +142,12 @@ def create_app(settings: Settings, *, upstream_transport=None):
     async def health():
         return {"status": "ok", "service": "relayguard", "demo_mode": settings.demo_mode}
 
+    @app.get("/readyz")
+    def ready():
+        if not storage_ready(settings.database_path):
+            return error(503, "storage_not_ready", "Storage is not ready.")
+        return {"status": "ready", "service": "relayguard"}
+
     @app.get("/")
     async def index():
         return FileResponse(STATIC / "index.html")
@@ -146,35 +155,35 @@ def create_app(settings: Settings, *, upstream_transport=None):
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/api/overview", dependencies=protected)
-    async def overview():
+    def overview():
         return {"demo_mode": settings.demo_mode, "upstream_origin": settings.upstream_url,
                 "stats": store.stats(), "audit": store.verify_audit(), "recent_events": store.recent_events(20)}
 
     @app.get("/api/credentials", dependencies=protected)
-    async def credentials():
+    def credentials():
         return {"items": store.list_credentials()}
 
     @app.post("/api/credentials", status_code=201, dependencies=protected)
-    async def create_credential(data: CredentialCreate):
+    def create_credential(data: CredentialCreate):
         return store.create_credential(data)
 
     @app.post("/api/credentials/{credential_id}/revoke", dependencies=protected)
-    async def revoke(credential_id: str):
+    def revoke(credential_id: str):
         result = store.revoke(credential_id)
         if result is None:
             raise HTTPException(404, "credential_not_found")
         return result
 
     @app.get("/api/events", dependencies=protected)
-    async def events(limit: int = Query(default=100, ge=1, le=1000), decision: Literal["allow", "deny", "error"] | None = None):
+    def events(limit: int = Query(default=100, ge=1, le=1000), decision: Literal["allow", "deny", "error"] | None = None):
         return {"items": store.recent_events(limit, decision)}
 
     @app.get("/api/audit/verify", dependencies=protected)
-    async def verify():
+    def verify():
         return store.verify_audit()
 
     @app.get("/api/audit/export", dependencies=protected)
-    async def export():
+    def export():
         return JSONResponse({"exported_at": timestamp(), **store.export_audit()},
                             headers={"Content-Disposition": 'attachment; filename="relayguard-audit.json"'})
 

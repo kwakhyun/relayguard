@@ -40,6 +40,8 @@ class Policy(BaseModel):
     requests_per_minute: int = Field(default=30, ge=1, le=10000)
     response_bytes_limit: int = Field(default=16384, ge=128, le=1048576)
     bytes_per_minute: int = Field(default=65536, ge=128, le=104857600)
+    max_total_requests: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    max_total_bytes: int | None = Field(default=None, ge=128, le=1_000_000_000_000)
 
     @field_validator("ip_allowlist")
     @classmethod

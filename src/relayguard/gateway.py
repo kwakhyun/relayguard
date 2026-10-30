@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
-import time
 import unicodedata
 import uuid
 from collections.abc import Sequence
@@ -49,6 +48,8 @@ _ERROR_MESSAGES = {
     "request_timeout": "The request body deadline was exceeded.",
     "rate_limit": "The request budget is exhausted for this minute.",
     "byte_budget": "The response byte budget is exhausted for this minute.",
+    "lifetime_request_limit": "The lifetime request budget for this relay credential is exhausted.",
+    "lifetime_byte_budget": "The lifetime response byte budget for this relay credential is exhausted.",
     "response_too_large": "The upstream response exceeds the allowed size.",
     "upstream_redirect": "The upstream response is not permitted.",
     "upstream_encoding": "The upstream response is not permitted.",
@@ -60,6 +61,15 @@ _ERROR_MESSAGES = {
     "storage_unavailable": "The relay is temporarily unavailable.",
     "audit_unavailable": "The relay is temporarily unavailable.",
 }
+
+
+class _ProxyRejection(Exception):
+    """Defer audit I/O until the body/upstream timeout context has exited."""
+
+    def __init__(self, status: int, reason: str, *, decision: str = "deny"):
+        self.status = status
+        self.reason = reason
+        self.decision = decision
 
 
 def canonical_path(raw_path: bytes, upstream_path: str) -> str | None:
@@ -233,58 +243,73 @@ async def proxy_request(
     peer_host = request.client.host if request.client else None
     address = _peer_address(peer_host)
     peer_ip = str(address) if address is not None else None
+    cancellation_audit_started = False
 
-    def fail(status: int, reason: str, *, decision: str = "deny") -> Response:
+    async def fail(status: int, reason: str, *, decision: str = "deny") -> Response:
         try:
-            store.audit(kind="proxy", credential_id=credential_id, decision=decision,
-                        reason=reason, method=method, path=audit_path, status=status,
-                        response_bytes=0, peer_ip=peer_ip)
+            await call_store(store.audit, kind="proxy", credential_id=credential_id, decision=decision,
+                             reason=reason, method=method, path=audit_path, status=status,
+                             response_bytes=0, peer_ip=peer_ip)
         except Exception:
             # Returning data without durable audit is prohibited, including
             # after a successful upstream request or byte-budget reservation.
             return _error_response(503, "audit_unavailable", request_id)
         return _error_response(status, reason, request_id)
 
-    def audit_cancellation() -> None:
+    async def audit_cancellation() -> None:
         # Cancellation can happen after an upstream write has started.  Leave
         # a safe record when storage is available, then preserve cancellation;
         # never convert it into a normal HTTP response or refund its budget.
+        nonlocal cancellation_audit_started
+        if cancellation_audit_started:
+            return
+        cancellation_audit_started = True
         try:
-            store.audit(kind="proxy", credential_id=credential_id, decision="error",
-                        reason="request_cancelled", method=method, path=audit_path,
-                        status=None, response_bytes=0, peer_ip=peer_ip)
+            await asyncio.to_thread(store.audit, kind="proxy", credential_id=credential_id, decision="error",
+                                    reason="request_cancelled", method=method, path=audit_path,
+                                    status=None, response_bytes=0, peer_ip=peer_ip)
         except BaseException:
             # This cleanup must preserve the cancellation already in flight.
             pass
 
+    async def call_store(operation, *args, **kwargs):
+        # SQLite opens/closes its connection inside each operation.  A worker
+        # may finish a transaction after cancellation; its allowance remains
+        # spent, while the cancelled coroutine never releases response data.
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except asyncio.CancelledError:
+            await audit_cancellation()
+            raise
+
     authorizations = request.headers.getlist("authorization")
     match = _BEARER.fullmatch(authorizations[0]) if len(authorizations) == 1 else None
     if match is None:
-        return fail(401, "invalid_token")
+        return await fail(401, "invalid_token")
     try:
-        credential = store.find_credential(match.group(1))
+        credential = await call_store(store.find_credential, match.group(1))
     except Exception:
-        return fail(503, "storage_unavailable", decision="error")
+        return await fail(503, "storage_unavailable", decision="error")
     if credential is None:
-        return fail(401, "invalid_token")
+        return await fail(401, "invalid_token")
     try:
         credential_id = credential["id"]
         policy = Policy.model_validate(credential["policy"])
     except Exception:
-        return fail(503, "storage_unavailable", decision="error")
+        return await fail(503, "storage_unavailable", decision="error")
 
     path = canonical_path(request.scope.get("raw_path", b""), upstream_path)
     if path is None:
-        return fail(403, "invalid_path")
+        return await fail(403, "invalid_path")
     rule = match_rule(request.method, path, policy.routes)
     if rule is None:
-        return fail(403, "route_denied")
+        return await fail(403, "route_denied")
     audit_path = rule.path
     if not peer_allowed(peer_host, policy.ip_allowlist):
-        return fail(403, "ip_denied")
+        return await fail(403, "ip_denied")
     query = parse_query(request.scope.get("query_string", b""), rule.query_keys)
     if query is None:
-        return fail(403, "query_denied")
+        return await fail(403, "query_denied")
 
     # Start from an empty header set.  In particular, never copy relay auth,
     # cookies, Host, proxy headers, connection headers or client API keys.
@@ -292,55 +317,57 @@ async def proxy_request(
                         "Accept-Encoding": "identity"}
     accepts = request.headers.getlist("accept")
     if len(accepts) > 1:
-        return fail(403, "invalid_headers")
+        return await fail(403, "invalid_headers")
     accept = accepts[0].lower() if accepts else "application/json, text/plain"
     if (len(accept) > 256 or any(ord(char) < 32 or ord(char) > 126 for char in accept)
         or not all(_ACCEPT_ITEM.fullmatch(item.strip()) for item in accept.split(","))):
-        return fail(403, "invalid_headers")
+        return await fail(403, "invalid_headers")
     upstream_headers["Accept"] = ", ".join(item.strip() for item in accept.split(","))
     content_types = request.headers.getlist("content-type")
     if len(content_types) > 1:
-        return fail(403, "invalid_headers")
+        return await fail(403, "invalid_headers")
     if content_types:
         content_type = _content_type(content_types[0])
         if content_type is None:
-            return fail(403, "invalid_headers")
+            return await fail(403, "invalid_headers")
         upstream_headers["Content-Type"] = content_type
     lengths = request.headers.getlist("content-length")
     if len(lengths) > 1 or (lengths and not re.fullmatch(r"[0-9]{1,10}", lengths[0])):
-        return fail(403, "invalid_headers")
+        return await fail(403, "invalid_headers")
     if lengths and int(lengths[0]) > settings.max_request_bytes:
-        return fail(413, "request_too_large")
+        return await fail(413, "request_too_large")
 
     try:
-        reservation = store.reserve_request(credential_id, time.time())
+        reservation = await call_store(store.reserve_request, credential_id, None)
     except Exception:
-        return fail(503, "storage_unavailable", decision="error")
+        return await fail(503, "storage_unavailable", decision="error")
     if reservation is not None:
-        if reservation not in {"token_revoked", "token_expired", "rate_limit"}:
-            return fail(503, "storage_unavailable", decision="error")
-        return fail(429 if reservation == "rate_limit" else 401, reservation)
+        if reservation not in {"token_revoked", "token_expired", "rate_limit", "lifetime_request_limit"}:
+            return await fail(503, "storage_unavailable", decision="error")
+        return await fail(429 if reservation in {"rate_limit", "lifetime_request_limit"} else 401, reservation)
 
     body = bytearray()
     try:
         async with asyncio.timeout(settings.upstream_timeout_seconds):
             async for chunk in request.stream():
                 if len(body) + len(chunk) > settings.max_request_bytes:
-                    return fail(413, "request_too_large")
+                    raise _ProxyRejection(413, "request_too_large")
                 body.extend(chunk)
+    except _ProxyRejection as rejection:
+        return await fail(rejection.status, rejection.reason, decision=rejection.decision)
     except asyncio.CancelledError:
-        audit_cancellation()
+        await audit_cancellation()
         raise
     except TimeoutError:
-        return fail(408, "request_timeout")
+        return await fail(408, "request_timeout")
     except ClientDisconnect:
-        return fail(400, "invalid_request")
+        return await fail(400, "invalid_request")
     except Exception:
-        return fail(400, "invalid_request")
+        return await fail(400, "invalid_request")
     if lengths and int(lengths[0]) != len(body):
-        return fail(400, "invalid_request")
+        return await fail(400, "invalid_request")
     if body and not content_types:
-        return fail(403, "invalid_headers")
+        return await fail(403, "invalid_headers")
 
     buffered = bytearray()
     response_type = "text/plain; charset=utf-8"
@@ -356,54 +383,56 @@ async def proxy_request(
             async with _send_stream(client, upstream_request) as upstream:
                 response_status = upstream.status_code
                 if 300 <= response_status < 400:
-                    return fail(502, "upstream_redirect", decision="error")
+                    raise _ProxyRejection(502, "upstream_redirect", decision="error")
                 if not 200 <= response_status < 300:
-                    return fail(502, "upstream_rejected", decision="error")
+                    raise _ProxyRejection(502, "upstream_rejected", decision="error")
                 encodings = upstream.headers.get_list("content-encoding")
                 if len(encodings) > 1 or (encodings and encodings[0].strip().lower() != "identity"):
-                    return fail(502, "upstream_encoding", decision="error")
+                    raise _ProxyRejection(502, "upstream_encoding", decision="error")
                 response_lengths = upstream.headers.get_list("content-length")
                 if (len(response_lengths) > 1 or
                     (response_lengths and not re.fullmatch(r"[0-9]{1,12}", response_lengths[0]))):
-                    return fail(502, "upstream_invalid_response", decision="error")
+                    raise _ProxyRejection(502, "upstream_invalid_response", decision="error")
                 if response_lengths and int(response_lengths[0]) > policy.response_bytes_limit:
-                    return fail(413, "response_too_large")
+                    raise _ProxyRejection(413, "response_too_large")
                 upstream_types = upstream.headers.get_list("content-type")
                 if len(upstream_types) > 1:
-                    return fail(502, "upstream_content_type", decision="error")
+                    raise _ProxyRejection(502, "upstream_content_type", decision="error")
                 if response_status not in (204, 205):
                     response_type = _content_type(upstream_types[0]) if upstream_types else None
                     if response_type is None:
-                        return fail(502, "upstream_content_type", decision="error")
+                        raise _ProxyRejection(502, "upstream_content_type", decision="error")
                 # Compression is rejected before iteration.  aiter_bytes also
                 # supports pre-buffered mock transports without re-decoding.
                 async for chunk in upstream.aiter_bytes(chunk_size=8192):
                     if len(buffered) + len(chunk) > policy.response_bytes_limit:
-                        return fail(413, "response_too_large")
+                        raise _ProxyRejection(413, "response_too_large")
                     buffered.extend(chunk)
                 if ((response_lengths and int(response_lengths[0]) != len(buffered)) or
                     (response_status in (204, 205) and buffered)):
-                    return fail(502, "upstream_invalid_response", decision="error")
+                    raise _ProxyRejection(502, "upstream_invalid_response", decision="error")
+    except _ProxyRejection as rejection:
+        return await fail(rejection.status, rejection.reason, decision=rejection.decision)
     except asyncio.CancelledError:
-        audit_cancellation()
+        await audit_cancellation()
         raise
     except TimeoutError:
-        return fail(502, "upstream_timeout", decision="error")
+        return await fail(502, "upstream_timeout", decision="error")
     except httpx.TimeoutException:
-        return fail(502, "upstream_timeout", decision="error")
+        return await fail(502, "upstream_timeout", decision="error")
     except Exception:
-        return fail(502, "upstream_unavailable", decision="error")
+        return await fail(502, "upstream_unavailable", decision="error")
 
     try:
-        budget = store.spend_bytes(credential_id, len(buffered), time.time())
+        budget = await call_store(store.spend_bytes, credential_id, len(buffered), None)
     except Exception:
-        return fail(503, "storage_unavailable", decision="error")
+        return await fail(503, "storage_unavailable", decision="error")
     if budget is not None:
-        if budget not in {"token_revoked", "token_expired", "byte_budget"}:
-            return fail(503, "storage_unavailable", decision="error")
-        return fail(429 if budget == "byte_budget" else 401, budget)
+        if budget not in {"token_revoked", "token_expired", "byte_budget", "lifetime_byte_budget"}:
+            return await fail(503, "storage_unavailable", decision="error")
+        return await fail(429 if budget in {"byte_budget", "lifetime_byte_budget"} else 401, budget)
     try:
-        store.audit(kind="proxy", credential_id=credential_id, decision="allow", reason="forwarded",
+        await call_store(store.audit, kind="proxy", credential_id=credential_id, decision="allow", reason="forwarded",
                     method=method, path=audit_path, status=response_status,
                     response_bytes=len(buffered), peer_ip=peer_ip)
     except Exception:

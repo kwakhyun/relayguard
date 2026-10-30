@@ -69,6 +69,25 @@ def test_policies_reject_permissive_type_coercion_and_invalid_limits(overrides):
         policy(**overrides)
 
 
+@pytest.mark.parametrize("field,value", [
+    ("max_total_requests", 0), ("max_total_requests", 1_000_000_001),
+    ("max_total_requests", True), ("max_total_requests", "10"),
+    ("max_total_bytes", 127), ("max_total_bytes", 1_000_000_000_001),
+    ("max_total_bytes", True), ("max_total_bytes", 128.0),
+])
+def test_lifetime_limits_reject_invalid_bounds_and_coercion(field, value):
+    with pytest.raises(ValidationError):
+        policy(**{field: value})
+
+
+def test_lifetime_limits_are_optional_and_accept_exact_bounds():
+    assert policy().max_total_requests is None
+    assert policy().max_total_bytes is None
+    assert policy(max_total_requests=None, max_total_bytes=None).max_total_bytes is None
+    assert policy(max_total_requests=1, max_total_bytes=128).max_total_requests == 1
+    assert policy(max_total_requests=1_000_000_000, max_total_bytes=1_000_000_000_000).max_total_bytes == 1_000_000_000_000
+
+
 @pytest.mark.parametrize("overrides", [
     {"name": "   "}, {"name": "line\nbreak"}, {"name": "\x7f"},
     {"ttl_hours": 0}, {"ttl_hours": 721}, {"ttl_hours": True}, {"unexpected": "field"},

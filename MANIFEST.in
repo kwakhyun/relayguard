@@ -1,8 +1,9 @@
 include LICENSE README.md CONTRIBUTING.md SECURITY.md CHANGELOG.md Dockerfile compose.yaml .env.example
 include requirements.lock requirements-dev.lock
-recursive-include src/relayguard/static *.html *.css *.js
-recursive-include docs *.md *.jpg *.json
-recursive-include examples *.json
+include README.en.md package.json package-lock.json
+recursive-include src/relayguard/static *.html *.css *.js *.svg LICENSE
+recursive-include docs *.md *.jpg *.png *.json
+recursive-include examples *.json *.md
 recursive-include scripts *.py
-recursive-include tests *.py
+recursive-include tests *.py *.mjs
 recursive-include .github *.yml

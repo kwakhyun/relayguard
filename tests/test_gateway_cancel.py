@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 
 import httpx
 import pytest
@@ -134,6 +135,47 @@ def test_cancelled_upstream_is_audited_closed_and_reraised(stage, cleanup_error,
         assert len(upstream_calls) == 1
         if stage == "body":
             assert closed == [True]
+        assert_cancellation_record(store)
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_db_reservation_never_resumes_upstream_but_may_spend_allowance():
+    async def scenario():
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        upstream_calls = []
+
+        class WaitingStore(RecordingStore):
+            def reserve_request(self, credential_id, now):
+                entered.set()
+                try:
+                    assert release.wait(timeout=3)
+                    return super().reserve_request(credential_id, now)
+                finally:
+                    finished.set()
+
+        store = WaitingStore()
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        async def upstream(req):
+            upstream_calls.append(req)
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            task = asyncio.create_task(proxy_request(request(receive), "customers/private-id", store, settings(), client))
+            try:
+                assert await asyncio.to_thread(entered.wait, 1)
+                task.cancel("original DB cancellation")
+                with pytest.raises(asyncio.CancelledError, match="original DB cancellation"):
+                    await task
+                assert not upstream_calls
+                assert store.reservations == 0
+            finally:
+                release.set()
+                assert await asyncio.to_thread(finished.wait, 1)
+        assert not upstream_calls
         assert_cancellation_record(store)
 
     asyncio.run(scenario())

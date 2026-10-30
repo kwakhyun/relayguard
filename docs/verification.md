@@ -1,5 +1,19 @@
 # 검증 기록
 
+## v0.2.0 public preview — 2026-10-30
+
+Local verification uses synthetic data and does not establish production capacity or independent security certification.
+
+- Python regression suite: 290 cases (local Python 3.11; remote Python matrix results are linked from the release).
+- Real loopback HTTP: the original 12 demo scenarios plus 8 lifetime quota assertions; readiness and admin/relay separation pass; the 35-event audit chain verifies.
+- Console state: 10 Node/JSDOM regressions cover stale connection/filter responses, secret clearing, duplicate actions and lifetime quota forms. JSDOM does not verify layout. CI runs supported Node 24; the local run used Node 22.21.0 below JSDOM's declared engine range.
+- Browser: lifetime fields and key issuance inspected at 390px width, detail/remaining allowance at 1280px; no captured browser warnings/errors. Prior redesign checks also covered 320px and 820px.
+- Migration: historical counters, restart persistence and six concurrent workers opening an old-schema DB; mixed old/new versions are unsupported.
+- Operations: secret-file ambiguity and malformed input, missing/locked storage, no-side-effect config checks, and event-loop responsiveness during DB work.
+- Packaging: wheel installed into a separate temporary environment; actual CLI, policy command, health/readiness and 20 referenced assets checked. Import checks reject fallback to the source checkout.
+
+The release notes link the actual CI, native container and anonymous-pull runs. Container execution is verified on GitHub Linux runners, not a local Docker daemon. Check those run conclusions before relying on image publication. A deprecation warning remains for FastAPI/Starlette's HTTPX TestClient adapter; it does not fail the suite.
+
 검증일: **2026-10-23 KST**. 로컬 macOS, Python 3.11.4. 이 문서는 실제 실행한 결과와 미확인 범위를 구분한다.
 
 | 항목 | 결과 |

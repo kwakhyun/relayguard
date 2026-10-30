@@ -64,6 +64,17 @@ class Store:
                     prev_hash TEXT NOT NULL, hash TEXT NOT NULL
                 );
             """)
+        # Serialize schema inspection with migration so concurrent workers do
+        # not both ALTER the same existing database.  Historical fixed-window
+        # rows are retained and become the initial lifetime usage, never zero.
+        with self.connection(write=True) as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(credentials)")}
+            for total, window_column in (("total_requests", "requests"), ("total_bytes", "bytes")):
+                if total not in columns:
+                    conn.execute(f"ALTER TABLE credentials ADD COLUMN {total} INTEGER NOT NULL DEFAULT 0")
+                    conn.execute(f"""UPDATE credentials SET {total}=coalesce(
+                        (SELECT sum({window_column}) FROM budgets WHERE credential_id=credentials.id), 0)
+                    """)
 
     @contextmanager
     def connection(self, write=False):
@@ -91,6 +102,8 @@ class Store:
         result = dict(row)
         result.pop("secret_hash", None)
         result["policy"] = json.loads(result["policy"])
+        result["usage"] = {"total_requests": result.pop("total_requests"),
+                           "total_bytes": result.pop("total_bytes")}
         return result
 
     def create_credential(self, data: CredentialCreate):
@@ -100,10 +113,13 @@ class Store:
             "id": str(uuid.uuid4()), "name": data.name, "prefix": token[:11],
             "created_at": timestamp(now), "expires_at": timestamp(now + data.ttl_hours * 3600),
             "revoked_at": None, "policy": data.policy.model_dump(),
+            "usage": {"total_requests": 0, "total_bytes": 0},
         }
         with self.connection(write=True) as conn:
             conn.execute(
-                "INSERT INTO credentials VALUES (?,?,?,?,?,?,?,?)",
+                """INSERT INTO credentials
+                   (id,name,secret_hash,prefix,created_at,expires_at,revoked_at,policy)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 (cred["id"], cred["name"], hashlib.sha256(token.encode()).hexdigest(), cred["prefix"],
                  cred["created_at"], cred["expires_at"], None, canonical(cred["policy"])),
             )
@@ -140,23 +156,35 @@ class Store:
     def _spend(self, credential_id, now, column, amount, limit_key):
         # column/limit_key come only from the two fixed methods below, never input.
         with self.connection(write=True) as conn:
+            # Sample live request time only after obtaining the writer lock.
+            # A queued call must not use a pre-lock clock to bypass expiry or
+            # charge a stale minute.  Explicit times remain for deterministic
+            # callers/tests; the gateway always requests live transaction time.
+            now = time.time() if now is None else now
             row = conn.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
             error = self.credential_error(row, now)
             if error:
                 return error
+            policy = json.loads(row["policy"])
+            total_column = "total_requests" if column == "requests" else "total_bytes"
+            lifetime_key = "max_total_requests" if column == "requests" else "max_total_bytes"
+            lifetime_limit = policy.get(lifetime_key)
+            if lifetime_limit is not None and row[total_column] + amount > lifetime_limit:
+                return "lifetime_request_limit" if column == "requests" else "lifetime_byte_budget"
             window = int(now // 60)
             conn.execute("INSERT OR IGNORE INTO budgets(credential_id,window) VALUES (?,?)", (credential_id, window))
             used = conn.execute(f"SELECT {column} FROM budgets WHERE credential_id=? AND window=?", (credential_id, window)).fetchone()[0]
-            limit = json.loads(row["policy"])[limit_key]
+            limit = policy[limit_key]
             if used + amount > limit:
                 return "rate_limit" if column == "requests" else "byte_budget"
             conn.execute(f"UPDATE budgets SET {column}={column}+? WHERE credential_id=? AND window=?", (amount, credential_id, window))
+            conn.execute(f"UPDATE credentials SET {total_column}={total_column}+? WHERE id=?", (amount, credential_id))
         return None
 
-    def reserve_request(self, credential_id, now):
+    def reserve_request(self, credential_id, now=None):
         return self._spend(credential_id, now, "requests", 1, "requests_per_minute")
 
-    def spend_bytes(self, credential_id, amount, now):
+    def spend_bytes(self, credential_id, amount, now=None):
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             raise ValueError("Invalid byte charge")
         return self._spend(credential_id, now, "bytes", amount, "bytes_per_minute")

@@ -34,8 +34,24 @@ def main():
     serve.add_argument("--tls-cert", help="PEM certificate for direct TLS termination")
     serve.add_argument("--tls-key", help="PEM private key for direct TLS termination")
     sub.add_parser("generate-admin-token", help="Print a new random admin token")
+    sub.add_parser("check-config", help="Validate configuration and secret files without connecting or creating a DB")
+    policy = sub.add_parser("policy", help="Check an issuance policy without credentials or network access")
+    policy_sub = policy.add_subparsers(dest="policy_command", required=True)
+    policy_check = policy_sub.add_parser("check", help="Validate a credential JSON and optional request cases")
+    policy_check.add_argument("file", help="Credential creation JSON file")
+    policy_check.add_argument("--cases", help="JSON file with expected allow/deny cases")
     args = parser.parse_args()
     os.umask(0o077)
+    if args.command == "policy":
+        from .policy_cli import run
+        raise SystemExit(run(args.file, args.cases))
+    if args.command == "check-config":
+        try:
+            Settings.from_env()
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+        print("Configuration is valid. No database was created and no upstream request was sent.")
+        return
     if args.command == "generate-admin-token":
         print(secrets.token_urlsafe(48))
         return

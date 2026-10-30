@@ -1,6 +1,6 @@
 services:
   relayguard:
-    image: ${RELAYGUARD_IMAGE:-ghcr.io/kwakhyun/relayguard:0.1.1}
+    image: ${RELAYGUARD_IMAGE:-ghcr.io/kwakhyun/relayguard:0.2.0}
     ports:
       - "127.0.0.1:8810:8810"
     environment:
@@ -19,7 +19,7 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8810/healthz', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8810/readyz', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
