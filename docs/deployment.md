@@ -67,7 +67,7 @@ docker compose up -d
 docker compose ps
 ```
 
-호스트에는 `127.0.0.1:8810`만 노출하며 보안 옵션과 영속 볼륨은 Compose 파일에 포함되어 있다. `docker compose down`은 컨테이너를 제거하고 DB 볼륨은 유지한다. `down --volumes`는 DB까지 삭제하므로 데이터 초기화가 필요할 때만 사용한다.
+호스트에는 `127.0.0.1:8810`만 노출하며 보안 옵션과 영속 볼륨은 Compose 파일에 포함되어 있다. v0.2.0 Compose의 상태 검사는 `/readyz`로 DB 쓰기 준비 상태를 확인한다. `docker compose down`은 컨테이너를 제거하고 DB 볼륨은 유지한다. `down --volumes`는 DB까지 삭제하므로 데이터 초기화가 필요할 때만 사용한다.
 
 ## 이미지 선택과 직접 빌드
 

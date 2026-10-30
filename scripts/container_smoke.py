@@ -142,6 +142,8 @@ def wait_ready(name, base, previous_token=None, *, admin_token=None):
                     health = json.loads(body)
                     require(health.get("status") == "ok" and health.get("demo_mode") is demo_mode,
                             "Unexpected health response or application mode")
+                    ready = expect_json(base, "/readyz", 200, timeout=2)
+                    require(ready.get("status") == "ready", "Storage is not ready")
                     expect_json(base, "/api/overview", 200, tokens[-1], timeout=2)
                     return tokens[-1]
             except (OSError, URLError, ValueError):
