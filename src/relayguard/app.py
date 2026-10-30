@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from . import __version__
 from .db import Store, timestamp
 from .demo import run_scenarios
 from .gateway import proxy_request
@@ -110,7 +111,7 @@ def create_app(settings: Settings, *, upstream_transport=None):
             app.state.upstream_client = client
             yield
 
-    app = FastAPI(title="RelayGuard", version="0.2.0", lifespan=lifespan,
+    app = FastAPI(title="RelayGuard", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     app.state.store, app.state.settings = store, settings
     app.state.demo_lock = asyncio.Lock()

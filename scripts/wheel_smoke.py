@@ -39,6 +39,7 @@ root = Path(sysconfig.get_path("purelib")).resolve()
 module = Path(relayguard.__file__).resolve()
 assert module.is_relative_to(root), "Imported source checkout instead of installed wheel"
 assert importlib.metadata.version("relayguard") == sys.argv[1], "Installed version differs from wheel"
+assert relayguard.__version__ == sys.argv[1], "Module version differs from wheel"
 
 class Assets(HTMLParser):
     def __init__(self):
