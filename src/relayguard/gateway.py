@@ -66,10 +66,11 @@ _ERROR_MESSAGES = {
 class _ProxyRejection(Exception):
     """Defer audit I/O until the body/upstream timeout context has exited."""
 
-    def __init__(self, status: int, reason: str, *, decision: str = "deny"):
+    def __init__(self, status: int, reason: str, *, decision: str = "deny", upstream_status: int | None = None):
         self.status = status
         self.reason = reason
         self.decision = decision
+        self.upstream_status = upstream_status
 
 
 def canonical_path(raw_path: bytes, upstream_path: str) -> str | None:
@@ -235,6 +236,7 @@ async def proxy_request(
     store: Store,
     settings: Settings,
     client: httpx.AsyncClient,
+    alerts=None,
 ) -> Response:
     request_id = uuid.uuid4().hex
     credential_id: str | None = None
@@ -245,15 +247,23 @@ async def proxy_request(
     peer_ip = str(address) if address is not None else None
     cancellation_audit_started = False
 
-    async def fail(status: int, reason: str, *, decision: str = "deny") -> Response:
+    def observe(reason: str, decision: str) -> None:
+        if alerts is not None:
+            alerts.observe(reason=reason, decision=decision, credential_id=credential_id,
+                           path=audit_path, method=method, request_id=request_id)
+
+    async def fail(status: int, reason: str, *, decision: str = "deny", upstream_status: int | None = None) -> Response:
         try:
             await call_store(store.audit, kind="proxy", credential_id=credential_id, decision=decision,
                              reason=reason, method=method, path=audit_path, status=status,
-                             response_bytes=0, peer_ip=peer_ip)
+                             response_bytes=0, peer_ip=peer_ip, request_id=request_id,
+                             upstream_status=upstream_status)
         except Exception:
             # Returning data without durable audit is prohibited, including
             # after a successful upstream request or byte-budget reservation.
+            observe("audit_unavailable", "error")
             return _error_response(503, "audit_unavailable", request_id)
+        observe(reason, decision)
         return _error_response(status, reason, request_id)
 
     async def audit_cancellation() -> None:
@@ -267,7 +277,7 @@ async def proxy_request(
         try:
             await asyncio.to_thread(store.audit, kind="proxy", credential_id=credential_id, decision="error",
                                     reason="request_cancelled", method=method, path=audit_path,
-                                    status=None, response_bytes=0, peer_ip=peer_ip)
+                                    status=None, response_bytes=0, peer_ip=peer_ip, request_id=request_id)
         except BaseException:
             # This cleanup must preserve the cancellation already in flight.
             pass
@@ -313,7 +323,7 @@ async def proxy_request(
 
     # Start from an empty header set.  In particular, never copy relay auth,
     # cookies, Host, proxy headers, connection headers or client API keys.
-    upstream_headers = {"Authorization": "Bearer " + settings.upstream_token,
+    upstream_headers = {settings.upstream_auth_header: settings.upstream_auth_value(),
                         "Accept-Encoding": "identity"}
     accepts = request.headers.getlist("accept")
     if len(accepts) > 1:
@@ -372,6 +382,7 @@ async def proxy_request(
     buffered = bytearray()
     response_type = "text/plain; charset=utf-8"
     response_status = 200
+    upstream_seen = False
     try:
         # This overall deadline also defeats a server that sends one byte just
         # before every individual httpx read timeout.
@@ -382,10 +393,15 @@ async def proxy_request(
             )
             async with _send_stream(client, upstream_request) as upstream:
                 response_status = upstream.status_code
+                upstream_seen = True
                 if 300 <= response_status < 400:
                     raise _ProxyRejection(502, "upstream_redirect", decision="error")
                 if not 200 <= response_status < 300:
-                    raise _ProxyRejection(502, "upstream_rejected", decision="error")
+                    # The body is never read.  Only an explicitly forwardable
+                    # status replaces the generic 502.
+                    forwarded = response_status in policy.forward_error_statuses
+                    raise _ProxyRejection(response_status if forwarded else 502, "upstream_rejected",
+                                          decision="error", upstream_status=response_status)
                 encodings = upstream.headers.get_list("content-encoding")
                 if len(encodings) > 1 or (encodings and encodings[0].strip().lower() != "identity"):
                     raise _ProxyRejection(502, "upstream_encoding", decision="error")
@@ -412,7 +428,9 @@ async def proxy_request(
                     (response_status in (204, 205) and buffered)):
                     raise _ProxyRejection(502, "upstream_invalid_response", decision="error")
     except _ProxyRejection as rejection:
-        return await fail(rejection.status, rejection.reason, decision=rejection.decision)
+        return await fail(rejection.status, rejection.reason, decision=rejection.decision,
+                          upstream_status=rejection.upstream_status if rejection.upstream_status is not None
+                          else (response_status if upstream_seen else None))
     except asyncio.CancelledError:
         await audit_cancellation()
         raise
@@ -426,16 +444,19 @@ async def proxy_request(
     try:
         budget = await call_store(store.spend_bytes, credential_id, len(buffered), None)
     except Exception:
-        return await fail(503, "storage_unavailable", decision="error")
+        return await fail(503, "storage_unavailable", decision="error", upstream_status=response_status)
     if budget is not None:
         if budget not in {"token_revoked", "token_expired", "byte_budget", "lifetime_byte_budget"}:
-            return await fail(503, "storage_unavailable", decision="error")
-        return await fail(429 if budget in {"byte_budget", "lifetime_byte_budget"} else 401, budget)
+            return await fail(503, "storage_unavailable", decision="error", upstream_status=response_status)
+        return await fail(429 if budget in {"byte_budget", "lifetime_byte_budget"} else 401, budget,
+                          upstream_status=response_status)
     try:
         await call_store(store.audit, kind="proxy", credential_id=credential_id, decision="allow", reason="forwarded",
                     method=method, path=audit_path, status=response_status,
-                    response_bytes=len(buffered), peer_ip=peer_ip)
+                    response_bytes=len(buffered), peer_ip=peer_ip, request_id=request_id,
+                    upstream_status=response_status)
     except Exception:
+        observe("audit_unavailable", "error")
         return _error_response(503, "audit_unavailable", request_id)
     headers = _safe_headers(request_id)
     headers["Content-Type"] = response_type

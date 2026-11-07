@@ -103,9 +103,13 @@ def test_readiness_checks_storage_without_mutation_or_provider_call(tmp_path):
     before = app.state.store.export_audit()
     with TestClient(app) as client:
         assert client.get("/readyz").json() == {"status": "ready", "service": "relayguard"}
-        assert client.get("/api/overview").status_code == 401
         assert client.get("/readyz").headers["cache-control"] == "no-store"
-    assert app.state.store.export_audit() == before
+        assert app.state.store.export_audit() == before
+        # A rejected admin call is audited; readiness probes are not.
+        assert client.get("/api/overview").status_code == 401
+        assert client.get("/readyz").status_code == 200
+    events = app.state.store.export_audit()["events"]
+    assert [(e["kind"], e["reason"], e["path"]) for e in events] == [("admin_auth", "admin_auth_failed", "/api/overview")]
 
 
 def test_locked_storage_is_not_ready_but_process_is_live(tmp_path):

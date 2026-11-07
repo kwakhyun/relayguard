@@ -4,6 +4,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Client-meaningful upstream statuses that do not overlap with relay
+# authentication (401), policy (403) or gateway budget (429) semantics.
+ForwardableStatus = Literal[400, 404, 409, 410, 412, 422]
+
 
 class RouteRule(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -42,6 +46,17 @@ class Policy(BaseModel):
     bytes_per_minute: int = Field(default=65536, ge=128, le=104857600)
     max_total_requests: int | None = Field(default=None, ge=1, le=1_000_000_000)
     max_total_bytes: int | None = Field(default=None, ge=128, le=1_000_000_000_000)
+    # Upstream non-2xx bodies are always withheld.  These statuses may be
+    # returned to the client as a bodiless gateway error instead of 502 so an
+    # integration can tell "not found" from "provider unavailable".
+    forward_error_statuses: list[ForwardableStatus] = Field(default_factory=list, max_length=6)
+
+    @field_validator("forward_error_statuses")
+    @classmethod
+    def unique_statuses(cls, values):
+        if len(set(values)) != len(values):
+            raise ValueError("Duplicate statuses")
+        return sorted(values)
 
     @field_validator("ip_allowlist")
     @classmethod
@@ -75,3 +90,33 @@ class CredentialCreate(BaseModel):
         if not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise ValueError("Name must be visible text")
         return value
+
+
+class CredentialRotate(BaseModel):
+    """Issue a replacement and shorten or end the current key in one transaction."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    credential: CredentialCreate
+    grace_hours: int = Field(default=0, ge=0, le=168)
+
+
+class PolicyCheckCase(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    method: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z]+$")
+    path: str = Field(min_length=1, max_length=2048)
+    peer_ip: str | None = Field(default=None, min_length=1, max_length=45)
+
+    @field_validator("peer_ip")
+    @classmethod
+    def numeric_peer(cls, value):
+        if value is None:
+            return value
+        if "%" in value:
+            raise ValueError("Scoped addresses are not supported")
+        ipaddress.ip_address(value)
+        return value
+
+
+class PolicyCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    policy: Policy
+    cases: list[PolicyCheckCase] = Field(min_length=1, max_length=50)
