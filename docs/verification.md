@@ -1,5 +1,16 @@
 # 검증 기록
 
+## Unreleased (main) — 2026-11-07
+
+Local verification of the operations and console changes listed under [Unreleased](../CHANGELOG.md#unreleased). Synthetic data only; this does not establish production capacity or independent security certification.
+
+- Python regression suite: **324 passed** (Linux, Python 3.13.18, SQLite 3.53.1). New cases cover request ID and provider status in audit, forwarded statuses, event filters and cursor pagination, rotation (immediate and grace period, unknown and inactive keys), the policy-check API, the next admin token and audited admin failures, metrics authorization and content, custom provider auth headers, alert delivery and cooldown, budget-window pruning with lifetime totals preserved, expression-index use, incremental verification, and truncation or consistent-rewrite detection against the in-process anchor.
+- Console: **23 Node/JSDOM regressions** pass on Node 22.23.4, including per-route issuance, unit conversion, rotation, activity filters and stale "load more" responses, policy tests, JSON import, CSV formula neutralization, English rendering and language/theme preferences, and a check that every visible Korean string has an English entry. A Python test keeps console reason labels identical to the reasons the server emits.
+- Real loopback HTTP (`scripts/e2e.py`): 12/12 demo scenarios, 8 lifetime quota checks, readiness and admin/relay separation pass; the 36-event audit chain verifies.
+- Packaging: sdist and wheel build; the wheel installed in a separate environment serves health/readiness and all 21 referenced assets, and its CLI and policy command run.
+- Browser (headless Chromium): overview, keys, details, rotation, activity, audit and issuance inspected at 1440px and 390px, in Korean and English, light and dark themes; no page errors or console errors.
+- Not run in this environment: Docker image build and container smoke, Compose start, `pip-audit`, and the Python 3.11/3.12 CI matrix. Those run in GitHub Actions.
+
 ## v0.2.0 public preview — 2026-10-30
 
 Local verification uses synthetic data and does not establish production capacity or independent security certification.

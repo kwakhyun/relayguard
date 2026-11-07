@@ -174,16 +174,58 @@ def test_audit_verification_detects_record_changes(store, mutation):
 
 
 def test_audit_tail_truncation_requires_external_checkpoint(store):
-    """A hash chain alone cannot detect deletion of its final records."""
+    """A hash chain alone cannot detect deletion of its final records.
+
+    The running process keeps its last verified head as an in-memory anchor,
+    so it reports the deletion.  A restarted process has no such anchor.
+    """
     created = issue(store)
     store.revoke(created["credential"]["id"])
     checkpoint = store.verify_audit()
     with store.connection() as conn:
         conn.execute("DELETE FROM events WHERE id=2")
-    shortened = store.verify_audit()
+    for incremental in (False, True):
+        flagged = store.verify_audit(incremental=incremental)
+        assert flagged["valid"] is False
+        assert flagged["error"] == "events_missing_after_1"
+    shortened = Store(store.path).verify_audit()
     assert shortened["valid"] is True
     assert shortened["event_count"] < checkpoint["event_count"]
     assert shortened["head_hash"] != checkpoint["head_hash"]
+
+
+def test_consistent_history_rewrite_is_reported_against_process_anchor(store):
+    from relayguard.db import GENESIS, canonical, event_hash
+
+    issue(store)
+    issue(store)
+    assert store.verify_audit()["valid"] is True
+    # Rebuild a self-consistent chain with altered content, as a database owner could.
+    with store.connection() as conn:
+        rows = conn.execute("SELECT id,payload FROM events ORDER BY id").fetchall()
+        previous = GENESIS
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["reason"] = "rewritten"
+            digest = event_hash(previous, payload)
+            conn.execute("UPDATE events SET payload=?, prev_hash=?, hash=? WHERE id=?",
+                         (canonical(payload), previous, digest, row["id"]))
+            previous = digest
+    assert Store(store.path).verify_audit()["valid"] is True
+    rewritten = store.verify_audit(incremental=True)
+    assert rewritten["valid"] is False and rewritten["error"] == "chain_changed_at_2"
+
+
+def test_incremental_verification_hashes_only_new_events_and_catches_new_tampering(store):
+    issue(store)
+    assert store.verify_audit()["mode"] == "full"
+    issue(store)
+    result = store.verify_audit(incremental=True)
+    assert result == {"valid": True, "event_count": 2, "head_hash": store.all_events()[-1]["hash"], "mode": "incremental"}
+    issue(store)
+    with store.connection() as conn:
+        conn.execute("UPDATE events SET payload=json_set(payload,'$.reason','forged') WHERE id=3")
+    assert store.verify_audit(incremental=True)["error"] == "chain_mismatch_at_3"
 
 
 def test_budget_resets_only_at_next_fixed_minute(store):
@@ -217,7 +259,10 @@ def test_lifetime_usage_does_not_reset_with_minute_or_restart(store):
     assert reopened.reserve_request(identifier, now + 120) == "lifetime_request_limit"
     assert reopened.spend_bytes(identifier, 1, now + 120) == "lifetime_byte_budget"
     assert reopened.find_credential(created["token"])["usage"] == {"total_requests": 2, "total_bytes": 256}
-    assert reopened.list_credentials()[0]["usage"] == {"total_requests": 2, "total_bytes": 256}
+    listed = reopened.list_credentials(now + 120)[0]["usage"]
+    assert listed == {"total_requests": 2, "total_bytes": 256, "minute_requests": 0, "minute_bytes": 0,
+                      "minute_window_start": listed["minute_window_start"]}
+    assert reopened.list_credentials(now + 60)[0]["usage"]["minute_requests"] == 1
     assert reopened.revoke(identifier)["usage"] == {"total_requests": 2, "total_bytes": 256}
 
 
@@ -302,7 +347,9 @@ def test_legacy_database_migration_preserves_history_and_is_idempotent(tmp_path,
     assert migrated.spend_bytes("legacy", 128, now) is None
     assert Store(path).find_credential(token)["usage"] == {"total_requests": 6, "total_bytes": 768}
     with migrated.connection() as conn:
-        assert conn.execute("SELECT count(*) FROM budgets").fetchone()[0] == 3
+        # Lifetime totals were backfilled before old fixed windows were pruned;
+        # only the previous and current windows remain.
+        assert conn.execute("SELECT count(*) FROM budgets").fetchone()[0] == 2
 
 
 def test_unlimited_lifetime_defaults_still_track_usage(store):

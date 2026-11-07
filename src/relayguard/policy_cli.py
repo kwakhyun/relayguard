@@ -15,7 +15,7 @@ import unicodedata
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .gateway import canonical_path, match_rule, parse_query, peer_allowed
-from .models import CredentialCreate, Policy
+from .models import CredentialCreate, Policy, RouteRule
 
 
 _POLICY_LIMIT = 65536
@@ -23,7 +23,8 @@ _CASES_LIMIT = 8 * 1024 * 1024
 _FIELDS = frozenset({
     "name", "ttl_hours", "policy", "routes", "method", "path", "query_keys",
     "ip_allowlist", "requests_per_minute", "response_bytes_limit",
-    "bytes_per_minute", "max_total_requests", "max_total_bytes", "cases", "peer_ip", "expected",
+    "bytes_per_minute", "max_total_requests", "max_total_bytes", "forward_error_statuses",
+    "cases", "peer_ip", "expected",
 })
 
 
@@ -108,32 +109,37 @@ def _validate(model, data, source):
         raise InputError(source, "invalid_schema", fields) from None
 
 
-def evaluate(policy: Policy, case: RequestCase) -> dict:
-    """Evaluate in the same order as proxy_request, without reserving a call."""
-    raw_path, _, raw_query = case.path.partition("?")
+def decide(policy: Policy, method: str, target: str, peer_ip: str | None) -> tuple[str, RouteRule | None]:
+    """Static gateway decision for one request line, in proxy_request order.
+
+    ``peer_ip=None`` skips the address check (reported by the caller).
+    """
+    raw_path, _, raw_query = target.partition("?")
     path = None
     if raw_path.startswith("/"):
         try:
             path = canonical_path(("/proxy" + raw_path).encode("ascii"), raw_path[1:])
         except UnicodeEncodeError:
             pass
-    rule = None
     if path is None:
-        code = "invalid_path"
-    else:
-        rule = match_rule(case.method, path, policy.routes)
-        if rule is None:
-            code = "route_denied"
-        elif not peer_allowed(case.peer_ip, policy.ip_allowlist):
-            code = "ip_denied"
-        else:
-            # Keep the original bytes: urlsplit/unquote would hide ambiguous
-            # spelling that the running gateway rejects.
-            try:
-                query = raw_query.encode("utf-8")
-            except UnicodeEncodeError:
-                query = b"\xff"
-            code = "allowed" if parse_query(query, rule.query_keys) is not None else "query_denied"
+        return "invalid_path", None
+    rule = match_rule(method, path, policy.routes)
+    if rule is None:
+        return "route_denied", None
+    if peer_ip is not None and not peer_allowed(peer_ip, policy.ip_allowlist):
+        return "ip_denied", rule
+    # Keep the original bytes: urlsplit/unquote would hide ambiguous
+    # spelling that the running gateway rejects.
+    try:
+        query = raw_query.encode("utf-8")
+    except UnicodeEncodeError:
+        query = b"\xff"
+    return ("allowed" if parse_query(query, rule.query_keys) is not None else "query_denied"), rule
+
+
+def evaluate(policy: Policy, case: RequestCase) -> dict:
+    """Evaluate in the same order as proxy_request, without reserving a call."""
+    code, rule = decide(policy, case.method, case.path, case.peer_ip)
     decision = "allow" if code == "allowed" else "deny"
     return {
         "name": case.name,

@@ -188,7 +188,7 @@ def verify_dashboard_and_boundaries(base, admin):
             "Dashboard HTML is missing")
     require("frame-ancestors 'none'" in headers.get("content-security-policy", ""),
             "Dashboard security policy is missing")
-    for path in ("/static/app.js", "/static/style.css"):
+    for path in ("/static/app.js", "/static/i18n.js", "/static/style.css"):
         _, body = expect(base, path, 200)
         require(len(body) > 100, f"Dashboard asset is empty: {path}")
     for path, method in (("/api/overview", "GET"), ("/api/credentials", "GET"),

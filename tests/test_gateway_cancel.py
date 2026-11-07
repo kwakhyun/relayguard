@@ -1,6 +1,7 @@
 """Cancellation must retain audit evidence without swallowing cancellation."""
 
 import asyncio
+import re
 import sqlite3
 import threading
 
@@ -62,6 +63,9 @@ def assert_cancellation_record(store):
     if store.fail_audit:
         assert not store.events
     else:
+        assert len(store.events) == 1
+        # Each audit record carries the response's request id for correlation.
+        assert re.fullmatch(r"[0-9a-f]{32}", store.events[0].pop("request_id"))
         assert store.events == [{
             "kind": "proxy", "credential_id": "synthetic-id", "decision": "error",
             "reason": "request_cancelled", "method": "POST", "path": "/customers/*",

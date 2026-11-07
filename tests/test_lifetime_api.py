@@ -52,7 +52,8 @@ def test_lifetime_request_limit_blocks_upstream_after_minute_changes(rig, monkey
     listed = client.get("/api/credentials", headers=admin)
     assert created["token"] not in listed.text
     assert "secret_hash" not in listed.text
-    assert listed.json()["items"][0]["usage"] == {"total_requests": 1, "total_bytes": 100}
+    usage = listed.json()["items"][0]["usage"]
+    assert {key: usage[key] for key in ("total_requests", "total_bytes")} == {"total_requests": 1, "total_bytes": 100}
     assert app.state.store.all_events()[-1]["reason"] == "lifetime_request_limit"
 
 
@@ -69,7 +70,7 @@ def test_lifetime_byte_limit_withholds_whole_response_after_minute_changes(rig, 
     assert b"SSSS" not in response.content
     assert len(seen) == 2
     usage = client.get("/api/credentials", headers=admin).json()["items"][0]["usage"]
-    assert usage == {"total_requests": 2, "total_bytes": 100}
+    assert {key: usage[key] for key in ("total_requests", "total_bytes")} == {"total_requests": 2, "total_bytes": 100}
     event = app.state.store.all_events()[-1]
     assert event["reason"] == "lifetime_byte_budget" and event["response_bytes"] == 0
 

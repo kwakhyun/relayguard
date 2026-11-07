@@ -14,6 +14,13 @@
 | `RELAYGUARD_UPSTREAM_TOKEN_FILE` | 원본 토큰을 읽을 파일. 같은 이름의 일반 토큰 변수와 동시 설정 금지 |
 | `RELAYGUARD_MAX_REQUEST_BYTES` | 요청 본문 한도, 1–1,048,576바이트. 기본 65,536 |
 | `RELAYGUARD_UPSTREAM_TIMEOUT_SECONDS` | upstream 전체 응답 제한 시간, 0.1–60초. 기본 5 |
+| `RELAYGUARD_UPSTREAM_AUTH_HEADER` | 원본 토큰을 넣을 헤더 이름. 기본 `Authorization`. 예: `X-API-Key`. `Host`, `Content-Type`, `Accept`, 전달/연결 헤더는 지정할 수 없다 |
+| `RELAYGUARD_UPSTREAM_AUTH_SCHEME` | 토큰 앞에 붙일 접두어. 기본 `Bearer`. `none`이면 토큰 원문만 보낸다 |
+| `RELAYGUARD_ADMIN_TOKEN_NEXT` (`_FILE`) | 선택. 관리자 토큰 교체 기간에 함께 허용할 다음 관리자 토큰. 최소 32자, 다른 비밀과 달라야 한다 |
+| `RELAYGUARD_METRICS_TOKEN` (`_FILE`) | 선택. `/metrics`만 읽을 수 있는 수집용 토큰. 설정하지 않으면 관리자 토큰으로만 읽는다 |
+| `RELAYGUARD_ALERT_WEBHOOK_URL` (`_FILE`) | 선택. 보안·한도 알림을 받을 HTTPS 웹훅. 비밀 경로가 들어간 URL은 `_FILE`로 주입한다 |
+| `RELAYGUARD_ALERT_DENY_THRESHOLD` | 키 하나가 60초 안에 이 횟수만큼 거부되면 알림. 기본 20 |
+| `RELAYGUARD_ALERT_COOLDOWN_SECONDS` | 같은 종류·같은 키의 알림을 다시 보내기 전 대기 시간. 기본 600, 0–86400 |
 
 API 계정이 여러 개면 격리된 게이트웨이 배포를 나눈다. 프로세스를 재시작해야 환경변수의 토큰 교체가 적용된다. 원본 제공자의 OAuth refresh는 자동 수행하지 않는다. Python CLI는 `.env`를 자동으로 읽지 않는다. Docker Compose는 프로젝트의 `.env`를 읽어 `compose.yaml`의 변수에 적용한다.
 
@@ -99,6 +106,43 @@ export RELAYGUARD_DB='.relayguard/relayguard.db'
 relayguard serve --host 127.0.0.1 --port 8810
 ```
 
+## 관리자 토큰 교체
+
+재시작은 필요하지만 콘솔과 자동화가 끊기지 않게 두 단계로 바꾼다.
+
+1. 새 토큰을 만들어 `RELAYGUARD_ADMIN_TOKEN_NEXT`로 주입하고 재시작한다. 두 토큰이 모두 허용되며 콘솔의 연결과 기록 패널에 교체 진행 중으로 표시된다.
+2. 관리 자동화와 운영자를 새 토큰으로 바꾼다. 이전 토큰을 쓴 실패 시도는 `admin_auth_failed`로 감사 기록에 남는다.
+3. 새 토큰을 `RELAYGUARD_ADMIN_TOKEN`으로 옮기고 `_NEXT`를 지운 뒤 재시작한다.
+
+토큰 유출이 의심되면 1단계 없이 바로 교체하고 재시작한다.
+
+## 원본 인증 헤더
+
+Bearer가 아닌 API 키 헤더를 쓰는 서비스는 헤더 이름과 접두어를 지정한다. 값은 요청마다 서버에서 주입하며 클라이언트가 보낸 같은 이름의 헤더는 전달하지 않는다.
+
+```bash
+export RELAYGUARD_UPSTREAM_AUTH_HEADER='X-API-Key'
+export RELAYGUARD_UPSTREAM_AUTH_SCHEME='none'
+relayguard check-config
+```
+
+## 모니터링: 지표와 알림
+
+`/metrics`는 Prometheus 형식으로 키 상태, 결정·사유별 요청 수, 승인한 응답 바이트, 관리자 인증 실패, 감사 기록 수와 증분 검증 결과를 제공한다. 값은 DB에서 계산하므로 워커가 여러 개여도 같다. 수집용으로는 관리자 토큰 대신 `RELAYGUARD_METRICS_TOKEN`을 쓴다. 이 토큰은 `/api/*`에 접근할 수 없다.
+
+```yaml
+scrape_configs:
+  - job_name: relayguard
+    scrape_interval: 30s
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/relayguard-metrics-token
+    static_configs:
+      - targets: ['relayguard.internal:8810']
+```
+
+요청 수 집계는 감사 테이블을 훑으므로 기록이 많으면 수집 간격을 30초 이상으로 둔다. `RELAYGUARD_ALERT_WEBHOOK_URL`을 설정하면 누적 한도 소진, 폐기된 키 사용, 관리자 인증 실패, 저장소·감사 실패, 키별 거부 급증을 JSON으로 보낸다. Slack과 호환되는 `text` 필드도 포함한다. 알림은 프로세스 안의 제한된 큐에서 3초 제한 시간으로 한 번만 시도하며 재시도와 리디렉션은 없다. 알림 실패가 게이트웨이 결정을 바꾸지 않으므로 중요한 감시는 `/metrics`로도 함께 한다. 웹훅 수신처는 키, 토큰, 쿼리 값, 본문을 받지 않는다. 컨테이너의 외부 통신 정책에 웹훅 호스트를 허용해야 한다.
+
 ## TLS와 네트워크 경계
 
 기본 바인딩은 `127.0.0.1`이다. `serve --tls-cert ... --tls-key ...`로 인증서를 지정하면 Uvicorn이 직접 TLS를 종료하며 실제 접속 IP를 사용할 수 있다. 데모 모드 외의 upstream은 항상 HTTPS다. 클라이언트 측 HTTP를 외부 네트워크에 그대로 노출하지 않는다.
@@ -121,9 +165,9 @@ relayguard serve --host 0.0.0.0 --port 8810 \
 
 새 DB는 파일 권한 `0600`으로 생성하고 CLI는 `umask 077`을 적용한다. 기존 DB와 디렉터리의 권한을 자동으로 재설정하지 않는다. 배포 전 소유자와 권한을 확인한다. SQLite 파일을 여러 호스트의 공유 NFS에 두지 않는다.
 
-감사/예산 테이블 자동 삭제나 외부 보관 서비스는 구현하지 않았다. 디스크 사용량과 503 증가를 모니터링한다. 감사 JSON과 head hash를 정기적으로 독립 저장소에 보관한다. SQLite Online Backup API 또는 정지 후 백업을 사용한다. 실행 중 `.db` 파일 하나만 복사하면 WAL의 최신 상태가 빠질 수 있다.
+분당 예산 테이블은 키마다 현재와 직전 분만 남기고 오래된 행을 자동으로 지운다. 누적 사용량은 키 행에 따로 보관하므로 지워도 줄지 않는다. 감사 테이블의 자동 삭제나 외부 보관 서비스는 구현하지 않았다. 이벤트 필터용 인덱스는 시작 시 만들어지며, 기록이 많은 기존 DB에서는 첫 시작이 조금 오래 걸릴 수 있다. 디스크 사용량과 503 증가를 모니터링한다. 감사 JSON과 head hash를 정기적으로 독립 저장소에 보관한다. SQLite Online Backup API 또는 정지 후 백업을 사용한다. 실행 중 `.db` 파일 하나만 복사하면 WAL의 최신 상태가 빠질 수 있다.
 
-조작되거나 일부만 복원된 체인은 시작 시 검증에 실패한다. 원본을 보존하고 외부 체크포인트와 비교한다. 과거의 정상 DB 전체를 복원하면 검증은 통과할 수 있으며 해지 상태와 사용량도 되돌아갈 수 있으므로, 복구 후 원본 제공자 토큰을 회전하고 릴레이 키를 재발급하는 절차가 필요하다.
+조작되거나 일부만 복원된 체인은 시작 시 검증에 실패한다. 실행 중인 프로세스는 마지막으로 검증한 지점을 메모리에 기억하므로, 그 뒤 기록이 삭제되거나 앞부분이 다시 작성되면 개요·`/metrics`·전체 검증에서 실패로 보고한다. 재시작 후에는 이 기준점이 사라진다. 원본을 보존하고 외부 체크포인트와 비교한다. 과거의 정상 DB 전체를 복원하면 검증은 통과할 수 있으며 해지 상태와 사용량도 되돌아갈 수 있으므로, 복구 후 원본 제공자 토큰을 회전하고 릴레이 키를 재발급하는 절차가 필요하다.
 
 호출 예약 후 실패나 클라이언트 연결 종료는 예산을 반환하지 않는다. 응답 승인 이후 감사 저장 실패도 예산을 소비할 수 있다. 보수적으로 차단하는 선택이며, 최종 도착량과 예산 사용량의 완전한 일치는 보장하지 않는다.
 
