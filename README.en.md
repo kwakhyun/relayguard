@@ -4,7 +4,7 @@
 
 **Give an integration a scoped key and a data budget instead of your provider token.**
 
-RelayGuard is a small, self-hosted HTTP credential gateway. It keeps one upstream Bearer token on the server, issues expiring relay keys, and checks the entire response against byte limits before releasing it. It uses Python, FastAPI, HTTPX and SQLite, with no external control plane or telemetry.
+RelayGuard is a small, self-hosted HTTP credential gateway. It keeps one upstream Bearer token on the server, issues expiring relay keys, and checks the entire response against byte limits before releasing it. It uses Python, FastAPI, HTTPX and SQLite, with no external control plane or telemetry; the only optional outbound destination besides the upstream is an alert webhook you configure.
 
 This is an early-stage MIT project for bounded JSON/text integrations. It has not undergone an independent security audit. See the [threat model](docs/threat-model.md) before connecting a real service.
 
@@ -22,7 +22,7 @@ python -m pip install --no-deps --no-build-isolation -e .
 python -m relayguard demo
 ```
 
-Open [the local console](http://127.0.0.1:8810), paste the demo admin token printed in the terminal, and run the verification scenarios. The console is currently in Korean; the JSON API and CLI are documented in English. The demo starts a synthetic CRM on port 8811 and makes no calls to a real provider. It stores state in `.relayguard/demo.db`. Press `Ctrl+C` to stop; the admin token changes on restart.
+Open [the local console](http://127.0.0.1:8810), paste the demo admin token printed in the terminal, and run the verification scenarios. The v0.2.0 console is in Korean. The current source adds an English translation (the console follows your browser language, with a toggle in the top bar) and a dark theme; see the [Unreleased changes](CHANGELOG.md#unreleased). The JSON API and CLI are documented in English. The demo starts a synthetic CRM on port 8811 and makes no calls to a real provider. It stores state in `.relayguard/demo.db`. Press `Ctrl+C` to stop; the admin token changes on restart.
 
 Use the public image for `linux/amd64` or `linux/arm64`:
 
@@ -45,7 +45,8 @@ docker run --rm -it --name relayguard-demo \
 | Persistent budgets | Transactional limits for requests and bytes per UTC minute. v0.2.0 also supports optional lifetime limits, `max_total_requests` and `max_total_bytes`. |
 | Response gate | The whole response is buffered and checked before release; a denied response does not leak an initial chunk. |
 | Expiry and revocation | Checked at request reservation and byte approval. Already executed upstream writes cannot be undone. |
-| Audit trail | Decision metadata and policy templates, without request/response bodies, query values or raw tokens. Hash-chain verification and JSON export are available. |
+| Audit trail | Decision metadata and policy templates, without request/response bodies, query values or raw tokens. Hash-chain verification and JSON export are available. In the current source, every event also carries the response's `X-Request-ID` and the provider status. |
+| Operations (current source) | Key rotation with a grace period, a static policy-check API, audited admin auth failures with an optional next admin token, Prometheus `/metrics`, an optional alert webhook, and a configurable provider auth header. |
 
 One deployment serves one upstream origin and one provider account. Use it when you control the client's base URL and Authorization header and need small, revocable integration credentials. A general API gateway, OAuth integration platform or LLM cost gateway may fit better if those are the actual requirements. See the [comparison and market assessment](docs/market-assessment.ko.md) (Korean).
 

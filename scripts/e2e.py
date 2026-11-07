@@ -74,11 +74,12 @@ def lifetime_checks(base, admin_token):
             status, listed = request(base, "/api/credentials", admin_token)
             assert status == 200, "Credential listing failed"
             visible = next(item for item in listed["items"] if item["id"] == created["credential"]["id"])
-            assert visible["usage"] == {"total_requests": expected_requests, "total_bytes": 100}, "Public lifetime usage was incorrect"
+            lifetime = {key: visible["usage"][key] for key in ("total_requests", "total_bytes")}
+            assert lifetime == {"total_requests": expected_requests, "total_bytes": 100}, "Public lifetime usage was incorrect"
             assert visible["policy"][limit] == value, "Lifetime limit was not persisted"
             assert created["token"] not in json.dumps(listed) and "secret_hash" not in json.dumps(listed), "Credential listing leaked secrets"
             checks.append({"name": limit + ": public usage", "passed": True,
-                           "usage": visible["usage"]})
+                           "usage": lifetime})
 
             status, audit = request(base, "/api/audit/export", admin_token)
             assert status == 200 and audit["verification"]["valid"], "Lifetime audit chain was invalid"

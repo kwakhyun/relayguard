@@ -836,7 +836,7 @@ input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; margin: 3p
 .protection-facts dd { margin: 2px 0 0; color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
 .protection-facts dd.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .path-label.is-prose { font-family: inherit; letter-spacing: inherit; }
-.relay-node > span:last-child { white-space: normal; text-wrap: balance; }
+.relay-node > span:last-child { white-space: normal; text-wrap: balance; word-break: keep-all; }
 .protection-body .notice { margin: 14px 0 0; padding: 10px 12px; font-size: 12px; }
 .recent-key { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
